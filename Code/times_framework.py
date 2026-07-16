@@ -1,16 +1,73 @@
 from dataclasses import dataclass
-from locale import currency
 import pandas as pd
 import numpy as np
 
 kNOKEUR = 10.39/1000
 kNOKGBP = 11.385/1000 #2016 average
 
-target_years = [2030, 2035, 2040, 2050]
 # Fixed trend multiplyer relative to 2030 to 2035, 2040 and 2050
 fixed_trend_multiplyer = [0.9394, 0.8945, 0.8297] 
 # Floating trend multiplyer relative to 2030 to 2035, 2040 and 2050
 floating_trend_multiplyer = [0.815, 0.7012, 0.6334]
+
+def get_cost_trend_multiplier(calendar_year: int, floating: bool = True):
+    """
+    Return O&M direct-cost trend multiplier relative to 2030.
+
+    Existing input data:
+    - 2030: 1.0
+    - 2035, 2040, 2050: from fixed/floating trend multiplier lists
+
+    For 2045, use linear interpolation between 2040 and 2050.
+    For years beyond 2050, keep the 2050 value constant.
+    """
+
+    if floating:
+        trend_points = {
+            2030: 1.0,
+            2035: floating_trend_multiplyer[0],
+            2040: floating_trend_multiplyer[1],
+            2050: floating_trend_multiplyer[2],
+        }
+    else:
+        trend_points = {
+            2030: 1.0,
+            2035: fixed_trend_multiplyer[0],
+            2040: fixed_trend_multiplyer[1],
+            2050: fixed_trend_multiplyer[2],
+        }
+
+    # Exact value available
+    if calendar_year in trend_points:
+        return trend_points[calendar_year]
+
+    # Before 2030: keep 2030 cost level
+    if calendar_year <= 2030:
+        return trend_points[2030]
+
+    # Between 2040 and 2050, interpolate, e.g. 2045
+    if 2040 < calendar_year < 2050:
+        y0, y1 = 2040, 2050
+        m0, m1 = trend_points[y0], trend_points[y1]
+        return m0 + (m1 - m0) * ((calendar_year - y0) / (y1 - y0))
+
+    # Between 2035 and 2040, interpolate if ever needed
+    if 2035 < calendar_year < 2040:
+        y0, y1 = 2035, 2040
+        m0, m1 = trend_points[y0], trend_points[y1]
+        return m0 + (m1 - m0) * ((calendar_year - y0) / (y1 - y0))
+
+    # Between 2030 and 2035, interpolate if ever needed
+    if 2030 < calendar_year < 2035:
+        y0, y1 = 2030, 2035
+        m0, m1 = trend_points[y0], trend_points[y1]
+        return m0 + (m1 - m0) * ((calendar_year - y0) / (y1 - y0))
+
+    # Beyond 2050: hold 2050 value constant
+    if calendar_year >= 2050:
+        return trend_points[2050]
+
+    return 1.0
 
 def read_market_price_file(filepath):
     """
@@ -52,15 +109,18 @@ def read_market_price_file(filepath):
         region = row['Region']
         price = row['Average PV (ore/kWh)']
         period = str(row['Period'])
-
+        
+        # Extract region name from format "O_Vestavind1" -> "Vestavind1"
+        region_name = region.split('_')[1]  # Remove O_ prefix
+        
         # Initialize nested structure if needed
-        if region not in market_price:
-            market_price[region] = {}
-        if period not in market_price[region]:
-            market_price[region][period] = {}
+        if region_name not in market_price:
+            market_price[region_name] = {}
+        if period not in market_price[region_name]:
+            market_price[region_name][period] = {}
         
         # Store the price
-        market_price[region][period][season] = price
+        market_price[region_name][period][season] = price
     
     return market_price
 
@@ -113,51 +173,119 @@ def get_season_from_time(t):
         return "Winter"
 
 
-def get_market_year_from_time(t):
+def get_market_year_from_time(t, start_year=2030):
     """
-    Determine the market year based on the integer part of time t.
-    
-    Year mapping (0-year basis):
-    - 0-4 years → 2030
-    - 5-9 years → 2035
-    - 10-14 years → 2040
-    - etc.
-    
-    Args:
-        t (float): Time value (e.g., 2.3 for t=2.3)
-        
-    Returns:
-        str: Year string (e.g., '2030', '2035')
+    Return market year as integer.
+    Example:
+    age 0-4   -> start_year
+    age 5-9   -> start_year + 5
+    age 10-14 -> start_year + 10
     """
     integer_part = int(t)
     year_offset = (integer_part // 5) * 5
-    base_year = 2030
-    return str(base_year + year_offset)
+    return start_year + year_offset
 
 
-def get_market_price(t, region_name, market_price_dict):
+def get_market_price(t, region_name, market_price_dict, start_year=2030):
     """
-    Get the market price for a given time and region.
-    
-    Args:
-        t (float): Time value (e.g., 2.3 for t=2.3)
-        region_name (str): Region name (e.g., 'Vestavind1', 'Nordavind')
-        market_price_dict (dict): Market price dictionary with structure:
-                                  region -> year -> season -> price (in øre/kWh)
-        
-    Returns:
-        float: Market price in kNOK/MWh, or None if not found
+    Get market price in kNOK/MWh.
+    Years beyond 2050 use 2050 market price.
+    Raises an error if data is missing.
     """
     season = get_season_from_time(t)
-    year = get_market_year_from_time(t)
-    
-    try:
-        price_ore_kwh = market_price_dict[region_name][year][season]
-        return convert_ore_kwh_to_knok_mwh(price_ore_kwh)
-    except KeyError:
-        # Return None if the specific market data is not available
-        return None
 
+    year_int = get_market_year_from_time(t, start_year=start_year)
+
+    if year_int > 2050:
+        year_int = 2050
+
+    year = str(year_int)
+
+    if region_name not in market_price_dict:
+        raise KeyError(
+            f"Region '{region_name}' not found in market price data. "
+            f"Available regions: {list(market_price_dict.keys())}"
+        )
+
+    if year not in market_price_dict[region_name]:
+        raise KeyError(
+            f"Year '{year}' not found for region '{region_name}'. "
+            f"Available years: {list(market_price_dict[region_name].keys())}"
+        )
+
+    if season not in market_price_dict[region_name][year]:
+        raise KeyError(
+            f"Season '{season}' not found for region '{region_name}', year '{year}'. "
+            f"Available seasons: {list(market_price_dict[region_name][year].keys())}"
+        )
+
+    price_ore_kwh = market_price_dict[region_name][year][season]
+    return convert_ore_kwh_to_knok_mwh(price_ore_kwh)
+
+def get_required_market_years(start_year: int, lifetime: int = 25, max_market_year: int = 2050):
+    """
+    Market years needed for a project starting in start_year.
+
+    Example:
+    start_year=2030, lifetime=25 -> [2030, 2035, 2040, 2045, 2050]
+    start_year=2035, lifetime=25 -> [2035, 2040, 2045, 2050]
+    start_year=2050, lifetime=25 -> [2050]
+
+    Years beyond max_market_year are assumed to use max_market_year.
+    """
+    required_years = []
+
+    for offset in range(0, lifetime, 5):
+        year = start_year + offset
+
+        if year > max_market_year:
+            year = max_market_year
+
+        if year not in required_years:
+            required_years.append(year)
+
+    return required_years
+
+def market_data_available_for_project(
+    market_data: dict,
+    region_name: str,
+    start_year: int,
+    lifetime: int = 25,
+    required_seasons=("Spring", "Summer", "Fall", "Winter"),
+    max_market_year: int = 2050,
+):
+    """
+    Returns True if a region has all required market-price data for a project.
+
+    If False, the investment candidate should be skipped entirely.
+    """
+
+    if region_name not in market_data:
+        return False, f"region '{region_name}' not found"
+
+    required_years = get_required_market_years(
+        start_year=start_year,
+        lifetime=lifetime,
+        max_market_year=max_market_year
+    )
+
+    for year_int in required_years:
+        year = str(year_int)
+
+        if year not in market_data[region_name]:
+            return False, f"year '{year}' missing for region '{region_name}'"
+
+        missing_seasons = [
+            season for season in required_seasons
+            if season not in market_data[region_name][year]
+        ]
+
+        if missing_seasons:
+            return False, (
+                f"missing seasons {missing_seasons} for region '{region_name}', year '{year}'"
+            )
+
+    return True, "market data available"
 
 SEVERITIES = ["minor", "major", "replace"]
 
@@ -218,8 +346,8 @@ vessel_data = {
     }
 }
 
-tech_market_data = read_market_price_file("C:\\Users\\IFE13253\\OneDrive - Institutt for Energiteknikk\\Documents\\OffshoreRisk\\RiskSimulation\\MonteCarlo-PostProcces\\Results\\tech onshore shadow price.csv")
-inc_market_data = read_market_price_file("C:\\Users\\IFE13253\\OneDrive - Institutt for Energiteknikk\\Documents\\OffshoreRisk\\RiskSimulation\\MonteCarlo-PostProcces\\Results\\inc onshore shadow price.csv")
+tech_market_data = read_market_price_file("C:\\Users\\IFE13253\\OneDrive - Institutt for Energiteknikk\\Documents\\OffshoreRisk\\RiskSimulation\\MonteCarlo-PostProcces\\Results\\Shadow power price by region- tech.csv")
+inc_market_data = read_market_price_file("C:\\Users\\IFE13253\\OneDrive - Institutt for Energiteknikk\\Documents\\OffshoreRisk\\RiskSimulation\\MonteCarlo-PostProcces\\Results\\Shadow power price by region - inc.csv")
 
 
 # ComponentType(name="Blades", shape=0.75, scale=86.8,  down_time=147.0, direct_cost=375689 * cost_multiplier * kNOKEUR),
@@ -257,7 +385,7 @@ class WindRegion:
     offshore_multiplyer: float
     capacity_factor: float
     distance_to_shore_km: float
-    floating: bool
+    floating: bool = True  # Default to True for floating wind farms, can be set to False for fixed-bottom
 
 
 def sample_failure_times(component: ComponentType, horizon_years: float, rng: np.random.Generator, offshore_factor: float = 1.0):
@@ -282,13 +410,15 @@ def sample_failure_times(component: ComponentType, horizon_years: float, rng: np
 def simulate_wind_farm_OandM(
     n_turbines: int,
     component_types: list = None,
-    horizon_years: float = 25.0,
+    start_year: int = 2030,
+    lifetime: int = 25,
+    floating: bool = True,
+    number_of_parks: float = 1.0,
     capacity_per_turbine: float = 15.0,
     capacity_factor: float = 0.5,
     price_per_mwh: float = 125.11 *kNOKEUR,
     distance_to_shore_km: float = 50.0,
     daily_rate: float = 10000.0,
-    discount_rate: float = 0.07,
     n_simulations: int = 10000,
     random_seed: int = None,
     offshore_factor: float = 1.0,
@@ -311,6 +441,11 @@ def simulate_wind_farm_OandM(
       (Original keys: 'total_costs', 'mean', 'p50', 'var95', 'cvar95', 'cost_per_mw' remain lifetime totals).
     """
     rng = np.random.default_rng(seed=random_seed)
+
+    horizon_years = lifetime
+
+    if horizon_years < 0:
+        raise ValueError("lifetime must be a positive integer representing the number of years to simulate.")
     # Use default component types (key offshore turbine components) if none provided
     if component_types is None:
         component_types = [
@@ -361,7 +496,6 @@ def simulate_wind_farm_OandM(
     # --- NEW: lifetime totals per simulation ---
     total_direct_costs_pv = np.zeros(n_simulations)
     total_lost_prod_costs_pv = np.zeros(n_simulations)
-    total_eq_annual_costs_pv = np.zeros(n_simulations)
     total_component_costs_pv = {
         label: np.zeros(n_simulations) for label in component_labels
     }
@@ -377,7 +511,6 @@ def simulate_wind_farm_OandM(
         for offset in target_offsets
     }
 
-    CRF = discount_rate * (1 + discount_rate) ** horizon_years / ((1 + discount_rate) ** horizon_years - 1)
     # Monte Carlo simulation
     for sim in range(n_simulations):
         # List of (event_time, event_cost_PV) for all failures in this simulation run
@@ -388,8 +521,6 @@ def simulate_wind_farm_OandM(
 
                 failure_times = sample_failure_times(comp, horizon_years, rng, offshore_factor)
                 for t_fail in failure_times:
-                    pv_factor = (1 + discount_rate) ** -t_fail
-
                     severity = rng.choice(SEVERITIES, p=comp.severity_probs)
                     
                     repair_time = comp.repair_time[severity]
@@ -421,23 +552,26 @@ def simulate_wind_farm_OandM(
                     
                     # Use dynamic market price if available and enabled, otherwise use fixed price
                     if market_price_dict is not None and region_name is not None:
-                        market_price = get_market_price(t_fail, region_name, market_price_dict)
-                        if market_price is not None:
-                            price_to_use = market_price
-                        else:
-                            price_to_use = price_per_mwh
+                        price_to_use = get_market_price(
+                            t_fail,
+                            region_name,
+                            market_price_dict,
+                            start_year=start_year
+                        )
                     else:
                         price_to_use = price_per_mwh
+
+                    calendar_year = int(get_market_year_from_time(t_fail, start_year=start_year))
+                    cost_trend_multiplier = get_cost_trend_multiplier(calendar_year=calendar_year, floating=floating)
                     
                     lost_prod_cost = lost_mwh * price_to_use
-                    direct_cost_pv = direct_cost * pv_factor
-                    lost_prod_cost_pv = lost_prod_cost * pv_factor
+                    direct_cost_pv = direct_cost * cost_trend_multiplier
+                    lost_prod_cost_pv = lost_prod_cost * cost_trend_multiplier
                     event_cost_pv = direct_cost_pv + lost_prod_cost_pv
-                    equivalent_annual_cost = event_cost_pv * CRF
 
                     # store richer event tuple
                     events_pv.append(
-                        (t_fail, comp_label, direct_cost_pv, lost_prod_cost_pv, event_cost_pv, equivalent_annual_cost)
+                        (t_fail, comp_label, direct_cost_pv, lost_prod_cost_pv, event_cost_pv)
                     )
         # Sort events by failure time for consistent accumulation
         events_pv.sort(key=lambda e: e[0])
@@ -445,12 +579,11 @@ def simulate_wind_farm_OandM(
         cum_sum_pv = 0.0
         cum_direct_pv = 0.0
         cum_lost_prod_pv = 0.0
-        cum_sum_eq_annual = 0.0
         cum_component_pv = {label: 0.0 for label in component_labels}
 
         offset_idx = 0
 
-        for t_fail, comp_label, direct_pv, lost_prod_pv, total_pv, eq_annual_cost in events_pv:
+        for t_fail, comp_label, direct_pv, lost_prod_pv, total_pv in events_pv:
             # fill checkpoints before this event if event occurs after next target
             while offset_idx < len(target_offsets) and t_fail > target_offsets[offset_idx]:
                 offset = target_offsets[offset_idx]
@@ -468,7 +601,6 @@ def simulate_wind_farm_OandM(
             cum_sum_pv += total_pv
             cum_direct_pv += direct_pv
             cum_lost_prod_pv += lost_prod_pv
-            cum_sum_eq_annual += eq_annual_cost
             cum_component_pv[comp_label] += total_pv
 
         # fill any remaining checkpoints with final cumulative values
@@ -486,19 +618,32 @@ def simulate_wind_farm_OandM(
 
         # lifetime totals for this simulation
         total_costs_pv[sim] = cum_sum_pv
-        total_eq_annual_costs_pv[sim] = cum_sum_eq_annual
         total_direct_costs_pv[sim] = cum_direct_pv
         total_lost_prod_costs_pv[sim] = cum_lost_prod_pv
 
         for label in component_labels:
             total_component_costs_pv[label][sim] = cum_component_pv[label]
 
-    # Costs are normalized per MW later; no separate park-count scaling is applied.
+    # Scale up costs by the number of identical parks (assuming fully correlated operation across parks)
+    if number_of_parks != 1.0:
+        for offset in target_offsets:
+            cumulative_costs_pv_by_target[offset] *= number_of_parks
+            cumulative_direct_costs_pv_by_target[offset] *= number_of_parks
+            cumulative_lost_prod_costs_pv_by_target[offset] *= number_of_parks
+
+            for label in component_labels:
+                cumulative_component_costs_pv_by_target[offset][label] *= number_of_parks
+
+        total_costs_pv *= number_of_parks
+        total_direct_costs_pv *= number_of_parks
+        total_lost_prod_costs_pv *= number_of_parks
+
+        for label in component_labels:
+            total_component_costs_pv[label] *= number_of_parks
     # Compute marginal 5-year period costs by differencing cumulative costs between successive target offsets
     marginal_direct_costs_pv_by_period = {}
     marginal_lost_prod_costs_pv_by_period = {}
     marginal_component_costs_pv_by_period = {}
-    marginal_eq_annual_costs_pv_by_period = {}
 
     prev_offset = 0
     for offset in target_offsets:
@@ -582,9 +727,10 @@ def simulate_wind_farm_OandM(
     # Prepare the results dictionary
     return {
         # Lifetime (full 0–horizon) present-value cost distribution
+        "number_of_parks": number_of_parks,
         "n_turbines": n_turbines,
         "capacity_per_turbine": capacity_per_turbine,
-        "installed_capacity": n_turbines * capacity_per_turbine,
+        "total_yearly_capacity": number_of_parks * n_turbines * capacity_per_turbine, #* capacity_factor * horizon_years,
 
         "lifetime_total_costs_pv": total_costs_pv,
         "lifetime_direct_costs_pv": total_direct_costs_pv,
@@ -594,8 +740,6 @@ def simulate_wind_farm_OandM(
         "lifetime_total_stats": summary_stats(total_costs_pv),
         "lifetime_direct_stats": summary_stats(total_direct_costs_pv),
         "lifetime_lost_prod_stats": summary_stats(total_lost_prod_costs_pv),
-        "equivalent_annual_costs": summary_stats(total_eq_annual_costs_pv),
-
         "lifetime_component_stats": {
             label: summary_stats(total_component_costs_pv[label])
             for label in component_labels
@@ -614,7 +758,7 @@ def simulate_wind_farm_OandM(
     }
 
 
-def pretty_print_results(results, currency="kNOK", floating=False):
+def pretty_print_results(results, start_year=2030, currency="kNOK", floating=True):
     """
     Nicely print summary statistics from the O&M Monte Carlo simulation.
 
@@ -622,6 +766,8 @@ def pretty_print_results(results, currency="kNOK", floating=False):
     ----------
     results : dict
         Output dictionary from simulate_wind_farm_OandM()
+    start_year : int
+        Starting year for the simulation
     currency : str
         Currency label for costs (e.g., 'NOK', 'EUR')
     """
@@ -635,17 +781,15 @@ def pretty_print_results(results, currency="kNOK", floating=False):
 
     print(f"Number of turbines in park:    {fmt(results['n_turbines'])}")
     print(f"Capacity per turbine:          {fmt(results['capacity_per_turbine'])}")
-    print(f"Installed capacity:            {fmt(results['installed_capacity'])} MW")
+    print(f"Total yearly capacity:         {fmt(results['total_yearly_capacity'])} MW")
     print("=" * 60)
     print("Lifetime O&M Cost Breakdown (PV, discounted to today)")
+    print("(per MW)")
     print("=" * 60)
-
-    capacity = results["installed_capacity"]
 
     total_stats = results["lifetime_total_stats"]
     direct_stats = results["lifetime_direct_stats"]
     lost_stats = results["lifetime_lost_prod_stats"]
-    eq_annual_stats = results["equivalent_annual_costs"]
 
     # ---- TOTAL ----
     print("Expected TOTAL O&M")
@@ -676,155 +820,112 @@ def pretty_print_results(results, currency="kNOK", floating=False):
         print(f"    Mean:            {fmt(stats['mean'])} {currency}")
         print(f"    Share of total cost: {share:.1f}%")
 
-    multiplyer = 1.0
-    for year in target_years:
-        print(f"\nCumulative O&M cost distribution up to year {year} (present value, discounted to today)")
-        print("-" * 60)
-        if floating:
-            if year == 2030:
-                multiplyer = 1
-            elif year == 2035:
-                multiplyer = floating_trend_multiplyer[0]
-            elif year == 2040:
-                multiplyer = floating_trend_multiplyer[1]
-            elif year == 2050:
-                multiplyer = floating_trend_multiplyer[2]
-        else:
-            if year == 2030:
-                multiplyer = 1
-            elif year == 2035:
-                multiplyer = fixed_trend_multiplyer[0]
-            elif year == 2040:
-                multiplyer = fixed_trend_multiplyer[1]
-            elif year == 2050:
-                multiplyer = fixed_trend_multiplyer[2]
 
+    print("=" * 60)
+    print("Marginal TOTAL O&M cost (average per 5-year period)")
+    print("(Adjusted with cost trend, per MW)")
+    print("=" * 60)
 
-        print("=" * 60)
-        print(f"O&M cost distribution normalized per MW for year {year} (present value, discounted to today)")
+    for period, stats in results["marginal_total_stats"].items():
+        start, _ = map(int, period.split("-"))
+        display_year = start_year + start
+
+        if display_year > 2050 or display_year == 2045:
+            continue  # skip years beyond 2050
+
+        cost_multiplier = get_cost_trend_multiplier(calendar_year=display_year, floating=floating)
+
+        print(f"Year {display_year} with cost trend multiplier: {cost_multiplier:.4f}")
         print("-" * 60)
-        print(f"  cvar5 (best 5%):   {fmt(multiplyer * total_stats['cvar5_low'] / capacity)} {currency}/MW")
-        print(f"  p5 (best 5%):      {fmt(multiplyer * total_stats['p5'] / capacity)} {currency}/MW")
-        print(f"  p25:               {fmt(multiplyer * total_stats['p25'] / capacity)} {currency}/MW")
-        print(f"  p50 (median):      {fmt(multiplyer * total_stats['p50'] / capacity)} {currency}/MW")
-        print(f"  p75:               {fmt(multiplyer * total_stats['p75'] / capacity )} {currency}/MW")
-        print(f"  p95 (worst 5%):    {fmt(multiplyer * total_stats['p95'] / capacity)} {currency}/MW")
-        print(f"  cvar95 (worst 5%): {fmt(multiplyer * total_stats['cvar95_high'] / capacity)} {currency}/MW")
-        print("=" * 60)
-        print(f"Equivalent annual O&M cost for year {year} (PV, discounted to today)")
-        print("-" * 60)
-        print(f"  Eq cvar5 (best 5%):   {fmt(multiplyer * eq_annual_stats['cvar5_low'] / capacity)} {currency}/MW")
-        print(f"  Eq p5 (best 5%):      {fmt(multiplyer * eq_annual_stats['p5'] / capacity)} {currency}/MW")
-        print(f"  Eq p25:               {fmt(multiplyer * eq_annual_stats['p25'] / capacity)} {currency}/MW")
-        print(f"  Eq p50 (median):      {fmt(multiplyer * eq_annual_stats['p50'] / capacity)} {currency}/MW")
-        print(f"  Eq p75:               {fmt(multiplyer * eq_annual_stats['p75'] / capacity)} {currency}/MW")
-        print(f"  Eq p95 (worst 5%):    {fmt(multiplyer * eq_annual_stats['p95'] / capacity)} {currency}/MW")
-        print(f"  Eq cvar95 (worst 5%): {fmt(multiplyer * eq_annual_stats['cvar95_high'] / capacity)} {currency}/MW")
+
+        print(f"  CVaR 5% (best):   {fmt(stats['cvar5_low'] / (results['total_yearly_capacity'] * 5))} {currency}/MW")
+        print(f"  P5 (best 5%):     {fmt(stats['p5'] / (results['total_yearly_capacity'] * 5))} {currency}/MW")
+        print(f"  P25:              {fmt(stats['p25'] / (results['total_yearly_capacity'] * 5))} {currency}/MW")
+        print(f"  P50 (median):     {fmt(stats['p50'] / (results['total_yearly_capacity'] * 5))} {currency}/MW")
+        print(f"  P75:              {fmt(stats['p75'] / (results['total_yearly_capacity'] * 5))} {currency}/MW")
+        print(f"  P95 (worst 5%):   {fmt(stats['p95'] / (results['total_yearly_capacity'] * 5))} {currency}/MW")
+        print(f"  CVaR 95% (worst): {fmt(stats['cvar95_high'] / (results['total_yearly_capacity'] * 5))} {currency}/MW")
+
+        # --- Optional: show breakdown (mean only, properly aggregated) ---
+        direct_mean = results["marginal_direct_stats"][period]["mean"]
+        lost_mean   = results["marginal_lost_prod_stats"][period]["mean"]
+        total_mean  = results["marginal_total_stats"][period]["mean"]
+
+        if total_mean > 0:
+            direct_share = 100 * direct_mean / total_mean
+            lost_share   = 100 * lost_mean / total_mean
+
+            print("\n  Breakdown (mean):")
+            print(f"    Direct cost:         {direct_share:.1f}%")
+            print(f"    Lost production:     {lost_share:.1f}%")
+
         print("=" * 60)
 
 
-    # print("Marginal TOTAL O&M cost per 5-year period")
-    # print("(discounted to today, per MW)")
-    # print("=" * 60)
-
-    # for period, stats in results["marginal_total_stats"].items():
-    #     start, _ = map(int, period.split("-"))
-    #     display_year = 2030 + start
-
-    #     if display_year == 2045:
-    #         continue
-
-    #     print(f"Year {display_year}")
-    #     print("-" * 60)
-
-    #     print(f"  CVaR 5% (best):   {fmt(stats['cvar5_low'] / results['installed_capacity'])} {currency}/MW")
-    #     print(f"  P5 (best 5%):     {fmt(stats['p5'] / results['installed_capacity'])} {currency}/MW")
-    #     print(f"  P25:              {fmt(stats['p25'] / results['installed_capacity'])} {currency}/MW")
-    #     print(f"  P50 (median):     {fmt(stats['p50'] / results['installed_capacity'])} {currency}/MW")
-    #     print(f"  P75:              {fmt(stats['p75'] / results['installed_capacity'])} {currency}/MW")
-    #     print(f"  P95 (worst 5%):   {fmt(stats['p95'] / results['installed_capacity'])} {currency}/MW")
-    #     print(f"  CVaR 95% (worst): {fmt(stats['cvar95_high'] / results['installed_capacity'])} {currency}/MW")
-
-    #     # --- Optional: show breakdown (mean only, properly aggregated) ---
-    #     direct_mean = results["marginal_direct_stats"][period]["mean"]
-    #     lost_mean   = results["marginal_lost_prod_stats"][period]["mean"]
-    #     total_mean  = results["marginal_total_stats"][period]["mean"]
-
-    #     if total_mean > 0:
-    #         direct_share = 100 * direct_mean / total_mean
-    #         lost_share   = 100 * lost_mean / total_mean
-
-    #         print("\n  Breakdown (mean):")
-    #         print(f"    Direct cost:         {direct_share:.1f}%")
-    #         print(f"    Lost production:     {lost_share:.1f}%")
-
-    #     print("=" * 60)
 
 
+def results_to_excel_tables(results, regions, filename="om_results.xlsx"):
 
-
-def results_to_excel_tables(results, regions, floating=False, filename="om_results.xlsx"):
     with pd.ExcelWriter(filename, engine="openpyxl") as writer:
 
         for region in regions:
 
             parkname = region.name
-            park_results = results[parkname]
 
-            eq_annual_stats = park_results["equivalent_annual_costs"]
-            capacity = park_results["installed_capacity"]
+            current_row = 0
 
-            data = {}
+            for start_year, park_results in sorted(results[parkname].items()):
 
-            multiplyer = 1.0
-            for year in target_years:
-                if floating:
-                    if year == 2030:
-                        multiplyer = 1
-                    elif year == 2035:
-                        multiplyer = floating_trend_multiplyer[0]
-                    elif year == 2040:
-                        multiplyer = floating_trend_multiplyer[1]
-                    elif year == 2050:
-                        multiplyer = floating_trend_multiplyer[2]
-                else:
-                    if year == 2030:
-                        multiplyer = 1
-                    elif year == 2035:
-                        multiplyer = fixed_trend_multiplyer[0]
-                    elif year == 2040:
-                        multiplyer = fixed_trend_multiplyer[1]
-                    elif year == 2050:
-                        multiplyer = fixed_trend_multiplyer[2]
+                data = {}
 
-                data[year] = {
-                    "CVaR 5% (best)": multiplyer * eq_annual_stats["cvar5_low"] / capacity,
-                    "P5": multiplyer * eq_annual_stats["p5"] / capacity,
-                    "P25": multiplyer * eq_annual_stats["p25"] / capacity,
-                    "P50": multiplyer * eq_annual_stats["p50"] / capacity,
-                    "P75": multiplyer * eq_annual_stats["p75"] / capacity,
-                    "P95": multiplyer * eq_annual_stats["p95"] / capacity,
-                    "CVaR 95% (worst)": multiplyer * eq_annual_stats["cvar95_high"] / capacity,
-                }
+                for period, stats in park_results["marginal_total_stats"].items():
 
-            df = pd.DataFrame(data)
-            df = df.sort_index(axis=1)
-            df = df.transpose()  # years as rows, stats as columns
+                    start, end = map(int, period.split("-"))
+                    year = start_year + start
 
-            # write region name in top-left cell
-            df.to_excel(writer, sheet_name=parkname[:30])
+                    if year > 2050 or year == 2045:
+                        continue
 
-            worksheet = writer.sheets[parkname[:30]]
-            worksheet.cell(row=1, column=1).value = parkname
+                    data[year] = {
+                        "CVaR 5% (best)": stats["cvar5_low"] / (park_results["total_yearly_capacity"] * 5),
+                        "P5": stats["p5"] / (park_results["total_yearly_capacity"] * 5),
+                        "P25": stats["p25"] / (park_results["total_yearly_capacity"] * 5),
+                        "P50": stats["p50"] / (park_results["total_yearly_capacity"] * 5),
+                        "P75": stats["p75"] / (park_results["total_yearly_capacity"] * 5),
+                        "P95": stats["p95"] / (park_results["total_yearly_capacity"] * 5),
+                        "CVaR 95% (worst)": stats["cvar95_high"] / (park_results["total_yearly_capacity"] * 5),
+                    }
+
+                df = pd.DataFrame(data).T
+
+                # Write title
+                pd.DataFrame([[f"Start year {start_year}"]]).to_excel(
+                    writer,
+                    sheet_name=parkname[:30],
+                    startrow=current_row,
+                    index=False,
+                    header=False
+                )
+
+                # Write table underneath
+                df.to_excel(
+                    writer,
+                    sheet_name=parkname[:30],
+                    startrow=current_row + 1
+                )
+
+                current_row += len(df) + 5
 
 
 
-
-
+lifetime_years = 25
+total_area_capacity_mw = 1000
 capacity_per_turbine = 15
 n_turbines = 20
+number_of_parks = total_area_capacity_mw/(capacity_per_turbine*n_turbines)
 
-OFFSHORE_FAILURE_MULTIPLIER = 1.27
+
+OFFSHORE_FAILURE_MULTIPLIER = 1.26
 
 # Instantiate WindRegion objects for each region
 # Name, offshore failure multiplier, capacity factor, distance from shore (km)
@@ -840,78 +941,133 @@ SorvestE = WindRegion("SorvestE", OFFSHORE_FAILURE_MULTIPLIER, 0.561, 112, float
 SorvestF = WindRegion("SorvestF", OFFSHORE_FAILURE_MULTIPLIER, 0.559, 152, floating=False)
 Sonnavind = WindRegion("Sonnavind", OFFSHORE_FAILURE_MULTIPLIER, 0.565, 60, floating=True)
 
-WindRegions = [Nordavind, Nordvest, Vestavind1, Vestavind2, SorvestA, SorvestB, SorvestC, SorvestD, SorvestE, SorvestF, Sonnavind]
+WindRegions = [Nordavind, Nordvest, Vestavind1, Vestavind2, SorvestA, SorvestB, SorvestC, SorvestD, SorvestE, SorvestF, Sonnavind] 
 
 # Toggle between market prices and fixed subsidy price
 USE_MARKET_PRICES = False  # Set to False to use fixed subsidy price (1.15 kNOK/MWh)
 
-scenario = ["TECH", "INC"]
+scenario = ["TECH"]
 
 all_results = {}
+start_years = [2030, 2035, 2040, 2050]
+skipped_investments = []
 
+for start_year in start_years:
 
-if USE_MARKET_PRICES:
-    for s in scenario:
-        if s == "TECH":
-            print("Running TECH scenario...")
-            market_data = tech_market_data
-            filename = "om_results_tech.xlsx"
-        elif s == "INC":
-            print("Running INC scenario...")
-            market_data = inc_market_data 
-            filename = "om_results_inc.xlsx" 
+    if USE_MARKET_PRICES:
+
+        for s in scenario:
+
+            if s == "TECH":
+                print(f"Running TECH-{start_year} scenario...")
+                market_data = tech_market_data
+                filename = f"om_results_tech_{start_year}.xlsx"
+
+            elif s == "INC":
+                print(f"Running INC-{start_year} scenario...")
+                market_data = inc_market_data
+                filename = f"om_results_inc_{start_year}.xlsx"
+
+            # Use nested structure so results do not overwrite each other
+            if s not in all_results:
+                all_results[s] = {}
+
+            if start_year not in all_results[s]:
+                all_results[s][start_year] = {}
+
+            for region in WindRegions:
+                print(f"Checking investment candidate: {s}-{start_year}-{region.name}")
+
+                market_region_name = region.name
+
+                # If you intentionally use Sorvest prices for all Sorvest sub-zones:
+                if region.name.startswith("Sorvest"):
+                    market_region_name = "Sorvest"
+
+                # IMPORTANT:
+                # Only keep this if you deliberately want Sonnavind to use Sorvest prices.
+                # If Sonnavind should be unavailable when missing from market data,
+                # then remove this line.
+                if region.name == "Sonnavind":
+                    market_region_name = "Sorvest"
+
+                is_available, reason = market_data_available_for_project(
+                    market_data=market_data,
+                    region_name=market_region_name,
+                    start_year=start_year,
+                    lifetime=lifetime_years
+                )
+
+                if not is_available:
+                    print(
+                        f"Skipping {s}-{start_year}-{region.name}: "
+                        f"no valid wind investment candidate because {reason}"
+                    )
+
+                    skipped_investments.append({
+                        "scenario": s,
+                        "start_year": start_year,
+                        "region": region.name,
+                        "market_region": market_region_name,
+                        "reason": reason
+                    })
+
+                    continue
+
+                print(f"Simulating for region: {region.name}")
+
+                result = simulate_wind_farm_OandM(
+                    n_turbines=n_turbines,
+                    capacity_per_turbine=capacity_per_turbine,
+                    start_year=start_year,
+                    lifetime=lifetime_years,
+                    floating=region.floating,
+                    number_of_parks=number_of_parks,
+                    capacity_factor=region.capacity_factor,
+                    price_per_mwh=1.15,
+                    distance_to_shore_km=region.distance_to_shore_km,
+                    daily_rate=10,
+                    n_simulations=10000,
+                    random_seed=123,
+                    offshore_factor=region.offshore_multiplyer,
+                    market_price_dict=market_data,
+                    region_name=market_region_name
+                )
+
+                # pretty_print_results(
+                #     result,
+                #     start_year=start_year,
+                #     currency="kNOK",
+                #     floating=region.floating
+                # )
+
+                # all_results[s][region.name][start_year] = result
+
+                
+            #results_to_excel_tables(all_results, WindRegions, start_year=start_year, filename=filename) 
+    else:
+        print(f"Running fixed subsidy price {start_year} scenario...")
+        market_data = None  # Not used when fixed price is applied
+        filename = f"om_results_subsidies_{start_year}.xlsx"
 
         for region in WindRegions:
             print(f"Simulating for region: {region.name}")
             
             # Map Sorvest sub-regions to the single "Sorvest" market region
             market_region_name = region.name
-            if region.name.startswith("Sorvest") or region.name =="Sonnavind" or region.name == "Vestavind2":
-                market_region_name = "NO2"
-            elif region.name == "Nordvest":
-                market_region_name = "NO3"
-            elif region.name == "Nordavind":
-                market_region_name = "NO4"
-            elif region.name == "Vestavind1":
-                market_region_name = "NO5"
+            if region.name.startswith("Sorvest") or region.name == "Sonnavind":
+                market_region_name = "Sorvest"
             
-            result = simulate_wind_farm_OandM(n_turbines=n_turbines, capacity_per_turbine=capacity_per_turbine, horizon_years=25.0,
-                                        capacity_factor=region.capacity_factor, price_per_mwh=1.15, discount_rate=0.07, 
-                                        distance_to_shore_km=region.distance_to_shore_km, daily_rate =10, n_simulations=5000, random_seed=123, offshore_factor=region.offshore_multiplyer,
+            result = simulate_wind_farm_OandM(n_turbines=n_turbines, capacity_per_turbine=capacity_per_turbine, start_year=start_year, lifetime=lifetime_years, floating=region.floating,
+                                        number_of_parks=number_of_parks, capacity_factor=region.capacity_factor, price_per_mwh=1.15, 
+                                        distance_to_shore_km=region.distance_to_shore_km, daily_rate =10, n_simulations=10000, random_seed=123, offshore_factor=region.offshore_multiplyer,
                                         market_price_dict=market_data, region_name=market_region_name)
-            pretty_print_results(result, currency="kNOK", floating=region.floating)
+            pretty_print_results(result, start_year=start_year, currency="kNOK", floating=region.floating)
 
-            all_results[region.name] = result
+            if region.name not in all_results:
+                all_results[region.name] = {}   
+
+            all_results[region.name][start_year] = result
 
             
-        results_to_excel_tables(all_results, WindRegions, floating=region.floating, filename=filename) 
-else:
-    print("Running fixed subsidy price scenario...")
-    market_data = None  # Not used when fixed price is applied
-    filename = "om_results_subsidies.xlsx"
-
-    for region in WindRegions:
-        print(f"Simulating for region: {region.name}")
-        
-        # Map Sorvest sub-regions to the single "Sorvest" market region
-        market_region_name = region.name
-        if region.name.startswith("Sorvest") or region.name =="Sonnavind" or region.name == "Vestavind2":
-            market_region_name = "NO2"
-        elif region.name == "Nordvest":
-            market_region_name = "NO3"
-        elif region.name == "Nordavind":
-            market_region_name = "NO4"
-        elif region.name == "Vestavind1":
-            market_region_name = "NO5"
-
-        result = simulate_wind_farm_OandM(n_turbines=n_turbines, capacity_per_turbine=capacity_per_turbine, horizon_years=25.0,
-                                    capacity_factor=region.capacity_factor, price_per_mwh=1.15, discount_rate=0.07, 
-                                    distance_to_shore_km=region.distance_to_shore_km, daily_rate =10, n_simulations=5000, random_seed=123, offshore_factor=region.offshore_multiplyer,
-                                    market_price_dict=market_data, region_name=market_region_name)
-        pretty_print_results(result, currency="kNOK", floating=region.floating)
-
-        all_results[region.name] = result
-
-        
-    results_to_excel_tables(all_results, WindRegions, floating=region.floating, filename=filename)
-
+results_to_excel_tables(all_results, WindRegions, filename=filename)
