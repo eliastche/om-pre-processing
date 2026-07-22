@@ -153,3 +153,40 @@ tech_market_data = read_market_price_file("C:\\Users\\IFE13253\\OneDrive - Insti
 inc_market_data = read_market_price_file("C:\\Users\\IFE13253\\OneDrive - Institutt for Energiteknikk\\Documents\\OffshoreRisk\\RiskSimulation\\MonteCarlo-PostProcces\\Results\\Shadow power price by region - inc.csv")
 
 print(tech_market_data)
+
+
+# print ("Hello World!\n")
+
+# def chiaras_function():
+#     # This is a function to count the amount of letters in the string
+#     text = input("Please enter a string: ")
+#     count = 0
+#     for char in text:
+#         if char.isalpha():
+#             count += 1
+#     return count
+
+# print(chiaras_function())
+
+# def even_or_odd():
+#     # This function checks if a number is even or odd
+#     number = int(input("Please enter an number: "))
+#     if number % 2 == 0:
+#         return "Even"
+#     else:
+#         return "Odd"
+
+# print(even_or_odd())
+
+# def asciivalue():
+#     # This function returns the ASCII value of a character
+#     char = input("Please enter a character: ")
+#     return ord(char)
+
+# print(asciivalue())
+
+# def ischar():
+#     # This function is given an ASCII value and returns theS character
+#     ascii_value = int(input("Please enter an ASCII value: "))
+#     return chr(ascii_value)                 
+# print (ischar())

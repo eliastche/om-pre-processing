@@ -168,7 +168,7 @@ component_data = {
         "severity_probs": [0.5383, 0.3563, 0.1054],  # minor, major, replace
 
         "repair_time": {"minor": 7, "major": 24, "replace": 81},
-        "material_cost": {"minor": 160 * kNOKGBP, "major": 3500 * kNOKGBP, "replace": 60000 * kNOKGBP},
+        "material_cost": {"minor": 2667 * kNOKGBP, "major": 58333 * kNOKGBP, "replace": 1000000 * kNOKGBP},
         "technicians": {"minor": 2.2, "major": 2.7, "replace": 7.9}
     },
 
@@ -178,7 +178,7 @@ component_data = {
         "severity_probs": [0.6729, 0.0647, 0.2624],
 
         "repair_time": {"minor": 8, "major": 22, "replace": 231},
-        "material_cost": {"minor": 125 * kNOKGBP, "major": 2500 * kNOKGBP, "replace": 230000 * kNOKGBP},
+        "material_cost": {"minor": 380 * kNOKGBP, "major": 7609 * kNOKGBP, "replace": 700000 * kNOKGBP},
         "technicians": {"minor": 2.2, "major": 3.2, "replace": 17.2}
     },
 
@@ -188,7 +188,7 @@ component_data = {
         "severity_probs": [0.9764, 0.0214, 0.0022],
 
         "repair_time": {"minor": 9, "major": 21, "replace": 288},
-        "material_cost": {"minor": 170 * kNOKGBP, "major": 1500 * kNOKGBP, "replace": 90000 * kNOKGBP},
+        "material_cost": {"minor": 819 * kNOKGBP, "major": 7222 * kNOKGBP, "replace": 433333 * kNOKGBP},
         "technicians": {"minor": 2.1, "major": 3.3, "replace": 21}
     }
 }
@@ -197,22 +197,22 @@ component_data = {
 vessel_data = {
     # Minor repairs correspond sto Crew Transfer Vessel (CTV) - Carrol
     "minor": {   # CTV
-        "day_rate": 1750 *kNOKGBP,
+        "day_rate": 3000 *kNOKEUR,
         "mobilisation_cost": 0,
         "mobilisation_hours": 0,
         "speed_kmh": 37.04
     },
     # Major repairs correspond to Fast Support Vessel (FSV) - Carrol
     "major": {   # FSV
-        "day_rate": 9500 * kNOKGBP,
+        "day_rate": 12500 * kNOKEUR,
         "mobilisation_cost": 0,
         "mobilisation_hours": 504,
         "speed_kmh": 22.224
     },
     # Major replacements correspond to Heavy Lift Vessel (HLV) - Carrol
     "replace": {  # HLV
-        "day_rate": 150000 * kNOKGBP,
-        "mobilisation_cost": 500000 * kNOKGBP,
+        "day_rate": 150000 * kNOKEUR,
+        "mobilisation_cost": 2100000 * kNOKEUR,
         "mobilisation_hours": 1440,
         "speed_kmh": 20.372
     }
@@ -311,6 +311,9 @@ def simulate_wind_farm_OandM(
       (Original keys: 'total_costs', 'mean', 'p50', 'var95', 'cvar95', 'cost_per_mw' remain lifetime totals).
     """
     rng = np.random.default_rng(seed=random_seed)
+
+    cost_ratio = capacity_per_turbine/10 #Is the linear cost increase/decrese from the 10MW base cost estimation
+
     # Use default component types (key offshore turbine components) if none provided
     if component_types is None:
         component_types = [
@@ -319,7 +322,10 @@ def simulate_wind_farm_OandM(
                 shape=component_data["Blades"]["shape"],
                 scale=component_data["Blades"]["scale"],
                 severity_probs=component_data["Blades"]["severity_probs"],
-                material_cost=component_data["Blades"]["material_cost"],
+                material_cost={
+                    k: cost_ratio * v
+                    for k, v in component_data["Blades"]["material_cost"].items()
+                },
                 repair_time=component_data["Blades"]["repair_time"],
                 nr_workers=component_data["Blades"]["technicians"]
             ),
@@ -328,7 +334,10 @@ def simulate_wind_farm_OandM(
                 shape=component_data["Gearbox"]["shape"],
                 scale=component_data["Gearbox"]["scale"],
                 severity_probs=component_data["Gearbox"]["severity_probs"],
-                material_cost=component_data["Gearbox"]["material_cost"],
+                material_cost={
+                    k: cost_ratio * v
+                    for k, v in component_data["Gearbox"]["material_cost"].items()
+                },
                 repair_time=component_data["Gearbox"]["repair_time"],
                 nr_workers=component_data["Gearbox"]["technicians"]
             ),
@@ -337,7 +346,10 @@ def simulate_wind_farm_OandM(
                 shape=component_data["Generator"]["shape"],
                 scale=component_data["Generator"]["scale"],
                 severity_probs=component_data["Generator"]["severity_probs"],
-                material_cost=component_data["Generator"]["material_cost"],
+                material_cost={
+                    k: cost_ratio * v
+                    for k, v in component_data["Generator"]["material_cost"].items()
+                },
                 repair_time=component_data["Generator"]["repair_time"],
                 nr_workers=component_data["Generator"]["technicians"]
             )
@@ -843,8 +855,8 @@ Sonnavind = WindRegion("Sonnavind", OFFSHORE_FAILURE_MULTIPLIER, 0.565, 60, floa
 WindRegions = [Nordavind, Nordvest, Vestavind1, Vestavind2, SorvestA, SorvestB, SorvestC, SorvestD, SorvestE, SorvestF, Sonnavind]
 
 # Toggle between market prices and fixed subsidy price
-USE_MARKET_PRICES = False  # Set to False to use fixed subsidy price (1.15 kNOK/MWh)
-
+USE_MARKET_PRICES = True  # Set to False to use fixed subsidy price (1.15 kNOK/MWh)
+subsidy_price = 1.15  # Fixed subsidy price in currency units per MWh
 scenario = ["TECH", "INC"]
 
 all_results = {}
@@ -876,7 +888,7 @@ if USE_MARKET_PRICES:
                 market_region_name = "NO5"
             
             result = simulate_wind_farm_OandM(n_turbines=n_turbines, capacity_per_turbine=capacity_per_turbine, horizon_years=25.0,
-                                        capacity_factor=region.capacity_factor, price_per_mwh=1.15, discount_rate=0.07, 
+                                        capacity_factor=region.capacity_factor, price_per_mwh=subsidy_price, discount_rate=0.07, 
                                         distance_to_shore_km=region.distance_to_shore_km, daily_rate =10, n_simulations=5000, random_seed=123, offshore_factor=region.offshore_multiplyer,
                                         market_price_dict=market_data, region_name=market_region_name)
             pretty_print_results(result, currency="kNOK", floating=region.floating)
@@ -905,7 +917,7 @@ else:
             market_region_name = "NO5"
 
         result = simulate_wind_farm_OandM(n_turbines=n_turbines, capacity_per_turbine=capacity_per_turbine, horizon_years=25.0,
-                                    capacity_factor=region.capacity_factor, price_per_mwh=1.15, discount_rate=0.07, 
+                                    capacity_factor=region.capacity_factor, price_per_mwh=subsidy_price, discount_rate=0.07, 
                                     distance_to_shore_km=region.distance_to_shore_km, daily_rate =10, n_simulations=5000, random_seed=123, offshore_factor=region.offshore_multiplyer,
                                     market_price_dict=market_data, region_name=market_region_name)
         pretty_print_results(result, currency="kNOK", floating=region.floating)
