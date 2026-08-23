@@ -154,13 +154,13 @@ def run_master(
 
     for capacity_per_turbine in turbine_capacity_list:
         for failure_rate_type in failure_rate_types:
-            component_types = build_component_types(
-                capacity_per_turbine,
-                failure_rate_type,
-            )
-
             for region in WindRegions:
                 print(f"Simulating for region: {region.name}")
+                component_types = build_component_types(
+                        capacity_per_turbine,
+                        failure_rate_type,
+                        region.floating
+                    )
 
                 for n_turbines in n_turbines_list:
                     for horizon in horizon_years:

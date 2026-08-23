@@ -152,6 +152,7 @@ def evaluate_monte_carlo_economics(
     annualized_total = defaultdict(list)
 
     for discount_rate in discount_rates:
+        print(f"Runnig discount rate {discount_rate}")
         for sim_id, events in enumerate(events_by_simulation):
             econ = evaluate_events_economics(
                 events=events,
@@ -177,48 +178,48 @@ def evaluate_monte_carlo_economics(
                     econ["annualized_by_valuation"][valuation_name]
                 )
 
-    direct_stats = summary_stats(
-        annualized_direct
-    )
-
-    for valuation in annualized_total:
-        lost_stats = summary_stats(
-            annualized_lost[valuation]
+        direct_stats = summary_stats(
+            annualized_direct
         )
 
-        total_stats = summary_stats(
-            annualized_total[valuation]
-        )
-
-        if valuation.startswith("Subsidy_"):
-
-            subsidy_price = float(
-                valuation.replace("Subsidy_", "")
+        for valuation in annualized_total:
+            lost_stats = summary_stats(
+                annualized_lost[valuation]
             )
 
-        else:
-
-            subsidy_price = None
-
-        for metric in ["Mean", "P75", "P95", "CVaR95"]:
-
-            results.append(
-                {
-                    "Metric": metric,
-
-                    "DiscountRate": discount_rate,
-
-                    "Scenario": valuation,
-
-                    "SubsidyPrice": subsidy_price,
-
-                    "DirectCost": direct_stats[metric],
-
-                    "LostCost": lost_stats[metric],
-
-                    "TotalCost": total_stats[metric],
-                }
+            total_stats = summary_stats(
+                annualized_total[valuation]
             )
+
+            if valuation.startswith("Subsidy_"):
+
+                subsidy_price = float(
+                    valuation.replace("Subsidy_", "")
+                )
+
+            else:
+
+                subsidy_price = None
+
+            for metric in ["Mean", "P75", "P95", "CVaR95"]:
+
+                results.append(
+                    {
+                        "Metric": metric,
+
+                        "DiscountRate": discount_rate,
+
+                        "Scenario": valuation,
+
+                        "SubsidyPrice": subsidy_price,
+
+                        "DirectCost": direct_stats[metric],
+
+                        "LostCost": lost_stats[metric],
+
+                        "TotalCost": total_stats[metric],
+                    }
+                )
 
     return results
 

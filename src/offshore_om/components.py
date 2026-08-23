@@ -15,6 +15,8 @@ component_data = {
         "global_failure_rate": 0.8778,
         "failure_rate_carrol": {"minor": 0.5378, "major": 0.3559, "replace": 0.008},
         "failure_rate_hendriks": {"minor": 0.049, "major": 0.018, "replace": 0.008},
+        "failure_rate_jenkins_floating": {"minor": 0.5378, "major": 0.3559, "replace": 0.008},
+        "failure_rate_jenkins_fixed": {"minor": 0.049, "major": 0.018, "replace": 0.008},
         "repair_time": {"minor": 7, "major": 24, "replace": 81},
         "material_cost": {"minor": 2667 * kNOKGBP, "major": 58333 * kNOKGBP, "replace": 1000000 * kNOKGBP},
         "technicians": {"minor": 2.2, "major": 2.7, "replace": 8},
@@ -26,6 +28,8 @@ component_data = {
         "global_failure_rate": 0.3350,
         "failure_rate_carrol": {"minor": 0.426, "major": 0.041, "replace": 0.042},
         "failure_rate_hendriks": {"minor": 0.644, "major": 0.157, "replace": 0.028},
+        "failure_rate_jenkins_floating": {"minor": 0.5378, "major": 0.3559, "replace": 0.008},
+        "failure_rate_jenkins_fixed": {"minor": 0.049, "major": 0.018, "replace": 0.008},
         "repair_time": {"minor": 8, "major": 22, "replace": 231},
         "material_cost": {"minor": 380 * kNOKGBP, "major": 7609 * kNOKGBP, "replace": 700000 * kNOKGBP},
         "technicians": {"minor": 2.2, "major": 3.2, "replace": 17},
@@ -37,6 +41,8 @@ component_data = {
         "global_failure_rate": 0.1732,
         "failure_rate_carrol": {"minor": 0.5078, "major": 0.0111, "replace": 0.0011},
         "failure_rate_hendriks": {"minor": 0.200, "major": 0.045, "replace": 0.040},
+        "failure_rate_jenkins_floating": {"minor": 0.5378, "major": 0.3559, "replace": 0.008},
+        "failure_rate_jenkins_fixed": {"minor": 0.049, "major": 0.018, "replace": 0.008},
         "repair_time": {"minor": 9, "major": 21, "replace": 288},
         "material_cost": {"minor": 819 * kNOKGBP, "major": 7222 * kNOKGBP, "replace": 433333 * kNOKGBP},
         "technicians": {"minor": 2.1, "major": 3.3, "replace": 21},
@@ -204,9 +210,15 @@ def calibrated_replacement_scale(component: ComponentType):
     target_mtbf = 1.0 / target_rate
     return target_mtbf / gamma(1.0 + 1.0 / component.shape)
 
-def build_component_types(capacity_per_turbine: float, failure_rate_type: str):
+def build_component_types(capacity_per_turbine: float, failure_rate_type: str, floating: bool):
     material_cost_scale = capacity_per_turbine / 10.0
     comps = []
+    if failure_rate_type == "jenkins":
+        if floating:
+            failure_rate_type = "jenkins_floating"
+        else:
+            failure_rate_type = "jenkins_fixed"
+
     for name in ["Blades", "Gearbox", "Generator"]:
         data = component_data[name]
         comp = ComponentType(
