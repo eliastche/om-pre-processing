@@ -6,15 +6,15 @@ build-backend = "setuptools.build_meta"
 name = "offshore_om"
 version = "0.1.0"
 
-[tool.setuptools.packages.find]
-where = ["src"]
-
-[tool.setuptools]
-package-dir = {"" = "src"}
-
 dependencies = [
     "numpy>=2.5",
     "pandas>=3.0",
     "scipy>=1.18",
     "openpyxl>=3.1",
 ]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]

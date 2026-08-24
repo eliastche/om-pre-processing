@@ -100,16 +100,16 @@ class WindRegion:
 
 WindRegions = [
     WindRegion("Nordavind", 0.494, 200, floating=True),
-    WindRegion("Nordvest", 0.483, 110, floating=True),
-    WindRegion("Vestavind1", 0.489, 70, floating=True),
-    WindRegion("Vestavind2", 0.512, 50, floating=True),
-    WindRegion("SorvestA", 0.545, 122, floating=False),
-    WindRegion("SorvestB", 0.543, 152, floating=False),
-    WindRegion("SorvestC", 0.551, 153, floating=False),
-    WindRegion("SorvestD", 0.545, 221, floating=False),
-    WindRegion("SorvestE", 0.561, 112, floating=False),
+    #WindRegion("Nordvest", 0.483, 110, floating=True),
+    #WindRegion("Vestavind1", 0.489, 70, floating=True),
+    #WindRegion("Vestavind2", 0.512, 50, floating=True),
+    #WindRegion("SorvestA", 0.545, 122, floating=False),
+    #WindRegion("SorvestB", 0.543, 152, floating=False),
+    #WindRegion("SorvestC", 0.551, 153, floating=False),
+    #WindRegion("SorvestD", 0.545, 221, floating=False),
+    #WindRegion("SorvestE", 0.561, 112, floating=False),
     WindRegion("SorvestF", 0.559, 152, floating=False),
-    WindRegion("Sonnavind", 0.565, 60, floating=True)
+    #WindRegion("Sonnavind", 0.565, 60, floating=True)
 ]
 
 class Component:
