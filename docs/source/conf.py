@@ -17,10 +17,14 @@ release = '0.1.0'
 extensions = [
     "sphinx.ext.autodoc",
     "sphinx.ext.napoleon",
+    "sphinxcontrib.bibtex",
 ]
 
 templates_path = ['_templates']
 exclude_patterns = []
+bibtex_bibfiles = ["../../Documentation.bib"]
+bibtex_reference_style = "author_year"
+bibtex_default_style = "apa"
 
 import os
 import sys

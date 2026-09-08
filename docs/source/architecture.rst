@@ -3,26 +3,26 @@ Architecture
 
 The project is divided into four logical layers:
 
-Economic Layer
+:doc: `economics`
 --------------
 
 Responsible for translating simulation outputs into
 financial metrics such as annual cost distributions,
 NPV calculations, VaR, and CVaR.
 
-Simulation Layer
+:doc: `simulations`
 ----------------
 
 Models stochastic failures, maintenance actions,
 and campaign scheduling.
 
-Execution Layer
----------------
+:doc: `run`
+-----------
 
 Provides orchestration logic and scenario management.
 
-Visualization Layer
--------------------
+:doc: `plotting`
+-----------------
 
 Provides plotting and reporting utilities for analysis
 and debugging.

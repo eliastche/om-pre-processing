@@ -10,8 +10,8 @@ Prerequisites
 
 Before using the package, install:
 
-* Python 3.10 or newer
-* Git
+* `Python <https://www.python.org/downloads/>`_. 3.10 or newer
+* `Git <https://git-scm.com/downloads>`_
 
 Installation
 ------------

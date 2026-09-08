@@ -13,7 +13,8 @@ uncertainty.
 The framework combines component-level failure modelling,
 campaign-based maintenance logistics, and economic analysis to
 generate risk-aware O&M metrics that can be integrated into
-energy system models such as the TIMES modelling framework.
+energy system models such as the TIMES modelling framework. The full model is available on
+`GitHub <https://github.com/eliastche/offshore-wind-om>`_.
 
 Overview
 ---------
@@ -28,12 +29,12 @@ Overview
 
 
 Logical layers
----------
+--------------
 
 .. toctree::
    :maxdepth: 1
 
-   economic
+   economics
    simulations
    run
    plotting
