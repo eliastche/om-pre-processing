@@ -1,3 +1,15 @@
+"""
+Economic evaluation utilities for offshore wind O&M analysis.
+
+This module provides functions for discounting maintenance costs, valuing
+lost electricity production, annualizing lifetime costs, and calculating
+risk statistics across Monte Carlo simulations.
+
+It also contains data-processing utilities for combining TIMES production,
+capacity, and market-price data to estimate the discounted CAPEX-equivalent
+value of Contracts for Difference subsidies.
+"""
+
 from pathlib import Path
 import re
 import pandas as pd
@@ -8,9 +20,48 @@ ZERO_TOLERANCE = 1e-2
 HOURS_PER_YEAR = 8760
 
 def pv_factor(time_years: float, discount_rate: float) -> float:
+    """
+    Calculate the present-value discount factor for a future cash flow.
+
+    Parameters
+    ----------
+    time_years : float
+        Time between the valuation date and the cash flow, in years.
+    discount_rate : float
+        Annual discount rate expressed as a decimal.
+
+    Returns
+    -------
+    float
+        Present-value factor for the specified time and discount rate.
+    """
+
     return (1.0 + discount_rate) ** (-time_years)
 
 def capital_recovery_factor(discount_rate: float, horizon_years: float) -> float:
+    """
+    Calculate the capital recovery factor for a finite horizon.
+
+    The capital recovery factor converts a present value into an equivalent
+    constant annual value over the specified horizon.
+
+    Parameters
+    ----------
+    discount_rate : float
+        Annual discount rate expressed as a decimal.
+    horizon_years : float
+        Economic evaluation horizon in years.
+
+    Returns
+    -------
+    float
+        Capital recovery factor.
+
+    Notes
+    -----
+    When the discount rate is zero, the factor is calculated as the reciprocal
+    of the evaluation horizon.
+    """
     r = discount_rate
     n = horizon_years
 
@@ -24,6 +75,40 @@ def weighted_market_price_for_event(
     region_name: str,
     market_price_dict: dict,
 ):
+    """
+    Calculate the time-weighted market price during a downtime event.
+
+    The downtime interval is divided across seasonal boundaries. The market
+    price associated with each interval is weighted by the number of downtime
+    hours occurring within that interval.
+
+    Parameters
+    ----------
+    event : CostEvent
+        Cost event containing downtime, lost production, and downtime timing
+        information.
+    region_name : str
+        Electricity market region used to retrieve market prices.
+    market_price_dict : dict
+        Nested market-price data indexed by region, year, and season.
+
+    Returns
+    -------
+    float
+        Time-weighted market price in kNOK/MWh. Returns zero when the event
+        has no positive downtime or lost production.
+
+    Raises
+    ------
+    ValueError
+        If a positive downtime event does not contain both
+        ``downtime_start_years`` and ``downtime_end_years``.
+
+    Notes
+    -----
+    Seasonal boundaries occur at fractions 0.25, 0.50, 0.75, and 1.00 of
+    each simulation year.
+    """
     if event.downtime_hours <= 0 or event.lost_mwh <= 0:
         return 0.0
 
@@ -76,6 +161,63 @@ def evaluate_events_economics(
     market_scenarios: dict[str, dict] | None = None,
     subsidy_prices_ore_per_kwh: list[float] | None = None,
 ):
+    """
+    Evaluate the discounted economic consequences of a sequence of events.
+
+    Direct O&M costs are discounted according to the occurrence time of each
+    event. Lost electricity production can be valued using one or more market
+    price scenarios, one or more subsidy prices, or both.
+
+    The resulting present values are converted into equivalent annual costs
+    using the capital recovery factor.
+
+    Parameters
+    ----------
+    events : iterable of CostEvent
+        Simulation events to evaluate.
+    discount_rate : float
+        Annual discount rate expressed as a decimal.
+    horizon_years : float
+        Economic evaluation horizon in years.
+    region_name : str
+        Electricity market region used when retrieving market prices.
+    market_scenarios : dict of str to dict, optional
+        Market-price scenarios. Keys identify the scenarios and values contain
+        nested market-price data indexed by region, year, and season.
+    subsidy_prices_ore_per_kwh : list of float, optional
+        Subsidy prices in ore per kWh used as alternative valuations of lost
+        electricity production.
+
+    Returns
+    -------
+    dict
+        Economic evaluation containing:
+
+        ``"discount_rate"``
+            Discount rate used in the evaluation.
+
+        ``"CRF"``
+            Capital recovery factor for the evaluation horizon.
+
+        ``"direct_pv"``
+            Present value of direct O&M costs.
+
+        ``"lost_prod_pv_by_valuation"``
+            Present value of lost production by valuation scenario.
+
+        ``"total_pv_by_valuation"``
+            Combined direct-cost and lost-production present value by
+            valuation scenario.
+
+        ``"annualized_by_valuation"``
+            Equivalent annual total cost by valuation scenario.
+
+    Notes
+    -----
+    Direct costs are discounted using the event occurrence time. Lost
+    production is valued only for events with positive lost MWh.
+    """
+
     crf = capital_recovery_factor(discount_rate, horizon_years)
 
     direct_pv = 0.0
@@ -144,6 +286,44 @@ def evaluate_monte_carlo_economics(
     market_scenarios: dict[str, dict] | None = None,
     subsidy_prices_ore_per_kwh: list[float] | None = None,
 ):
+    """
+    Evaluate annualized economic outcomes across Monte Carlo simulations.
+
+    Each simulation realization is evaluated for the supplied discount rates
+    and lost-production valuation scenarios. Annualized direct costs, lost
+    production costs, and total costs are summarized using the mean, P75,
+    P95, and CVaR95.
+
+    Parameters
+    ----------
+    mc_result : dict
+        Monte Carlo simulation results containing ``"events_by_simulation"``.
+    discount_rates : list of float
+        Annual discount rates expressed as decimals.
+    horizon_years : float
+        Economic evaluation horizon in years.
+    region_name : str
+        Electricity market region used for market-price valuation.
+    market_scenarios : dict of str to dict, optional
+        Market-price scenarios. Keys identify the scenarios and values contain
+        nested market-price data indexed by region, year, and season.
+    subsidy_prices_ore_per_kwh : list of float, optional
+        Subsidy prices in ore per kWh used as alternative valuations of lost
+        electricity production.
+
+    Returns
+    -------
+    list of dict
+        Economic result rows for each discount rate, valuation scenario, and
+        statistical metric. Each row contains the direct cost, lost-production
+        cost, total cost, capital recovery factor, and relevant scenario
+        metadata.
+
+    Notes
+    -----
+    Subsidy valuations are identified using the ``"Subsidy_"`` prefix. The
+    corresponding subsidy price is included separately in the returned row.
+    """
     events_by_simulation = mc_result["events_by_simulation"]
 
     results = []
@@ -209,6 +389,8 @@ def evaluate_monte_carlo_economics(
 
                         "DiscountRate": discount_rate,
 
+                        "CRF": econ["CRF"],
+
                         "Scenario": valuation,
 
                         "SubsidyPrice": subsidy_price,
@@ -224,6 +406,25 @@ def evaluate_monte_carlo_economics(
     return results
 
 def summary_stats(values):
+    """
+    Calculate central and upper-tail statistics.
+
+    Parameters
+    ----------
+    values : array-like
+        Numerical values to summarize.
+
+    Returns
+    -------
+    dict
+        Dictionary containing the mean, 75th percentile, 95th percentile,
+        and CVaR95.
+
+    Notes
+    -----
+    CVaR95 is calculated as the mean of values greater than or equal to the
+    empirical 95th-percentile threshold.
+    """
 
     values = np.asarray(values)
 
@@ -247,6 +448,29 @@ def summary_stats(values):
     }
 
 def read_market_price_file(filepath):
+    """
+    Read seasonal electricity market prices from a CSV file.
+
+    The input table is converted into a nested dictionary indexed by market
+    region, model period, and season.
+
+    Parameters
+    ----------
+    filepath : path-like
+        Path to the market-price CSV file.
+
+    Returns
+    -------
+    dict
+        Nested market-price dictionary with the structure
+        ``market_price[region][period][season]``.
+
+    Notes
+    -----
+    The input file must contain the columns ``"Season"``, ``"Region"``,
+    ``"Average PV (ore/kWh)"``, and ``"Period"``.
+    """
+
     df = pd.read_csv(filepath)
 
     market_price = {}
@@ -264,10 +488,38 @@ def read_market_price_file(filepath):
 
 
 def convert_ore_kwh_to_knok_mwh(price_ore_kwh):
+    """
+    Convert an electricity price from ore/kWh to kNOK/MWh.
+
+    Parameters
+    ----------
+    price_ore_kwh : float
+        Electricity price in ore per kWh.
+
+    Returns
+    -------
+    float
+        Electricity price in kNOK per MWh.
+    """
     return price_ore_kwh * 0.01
 
 
 def get_season_from_time(t):
+    """
+    Map simulation time to a season.
+
+    Each simulation year is divided into four equal seasonal intervals.
+
+    Parameters
+    ----------
+    t : float
+        Simulation time in years.
+
+    Returns
+    -------
+    str
+        ``"Spring"``, ``"Summer"``, ``"Fall"``, or ``"Winter"``.
+    """
     decimal_part = t % 1.0
     if decimal_part < 0.25:
         return "Spring"
@@ -279,6 +531,22 @@ def get_season_from_time(t):
 
 
 def get_market_year_from_time(t):
+    """
+    Map simulation time to a market-price model year.
+
+    Market years are assigned in five-year increments beginning in 2030 and
+    are capped at 2050.
+
+    Parameters
+    ----------
+    t : float
+        Simulation time in years.
+
+    Returns
+    -------
+    str
+        Market-price model year.
+    """
     integer_part = int(t)
     year_offset = (integer_part // 5) * 5
     market_year = 2030 + year_offset
@@ -286,6 +554,27 @@ def get_market_year_from_time(t):
 
 
 def get_market_price(t, region_name, market_price_dict):
+    """
+    Retrieve the market price for a simulation time and region.
+
+    The simulation time is converted into a season and market-price model year
+    before the corresponding value is retrieved and converted to kNOK/MWh.
+
+    Parameters
+    ----------
+    t : float
+        Simulation time in years.
+    region_name : str
+        Electricity market region.
+    market_price_dict : dict
+        Nested market-price data indexed by region, year, and season.
+
+    Returns
+    -------
+    float or None
+        Market price in kNOK/MWh, or ``None`` if the required region, year,
+        or season is unavailable.
+    """
     season = get_season_from_time(t)
     year = get_market_year_from_time(t)
 
@@ -297,6 +586,20 @@ def get_market_price(t, region_name, market_price_dict):
 
 
 def get_market_region_name(region_name):
+    """
+    Map an offshore wind region to its Norwegian electricity price region.
+
+    Parameters
+    ----------
+    region_name : str
+        Offshore wind region name.
+
+    Returns
+    -------
+    str
+        Corresponding electricity price region. If no explicit mapping is
+        defined, the original region name is returned.
+    """
     if region_name.startswith("Sorvest") or region_name == "Sonnavind" or region_name == "Vestavind2":
         return "NO2"
     if region_name == "Nordvest":
@@ -310,20 +613,54 @@ def get_market_region_name(region_name):
 
 def ore_kwh_to_knok_gwh(price_ore_kwh: float) -> float:
     """
-    Convert øre/kWh to kNOK/GWh.
+    Convert an electricity price from ore/kWh to kNOK/GWh.
 
-    1 øre = 0.01 NOK
-    1 GWh = 1,000,000 kWh
-    1 kNOK = 1,000 NOK
+    Parameters
+    ----------
+    price_ore_kwh : float
+        Electricity price in ore per kWh.
+
+    Returns
+    -------
+    float
+        Electricity price in kNOK per GWh.
+
+    Notes
+    -----
+    The conversion uses 1 ore equal to 0.01 NOK, 1 GWh equal to 1,000,000
+    kWh, and 1 kNOK equal to 1,000 NOK.
     """
     return price_ore_kwh * 10.0
 
 
 def read_market_price_table(filepath):
     """
-    Reads market price file and returns a DataFrame with prices in kNOK/GWh.
+    Read and prepare a TIMES market-price table.
 
-    Expected columns: TimeSliceSorted, Region, Average PV (ore/kWh), Period
+    Market prices are converted from ore/kWh to kNOK/GWh, and model periods
+    are converted to strings for subsequent table merges.
+
+    Parameters
+    ----------
+    filepath : path-like
+        Path to the market-price CSV file.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Market-price table containing ``"TimeSliceSorted"``, ``"Region"``,
+        ``"Period"``, ``"MarketPrice_ore_per_kWh"``, and
+        ``"MarketPrice_kNOK_per_GWh"``.
+
+    Raises
+    ------
+    ValueError
+        If the input file is missing one or more required columns.
+
+    Notes
+    -----
+    The required input columns are ``"TimeSliceSorted"``, ``"Region"``,
+    ``"Average PV (ore/kWh)"``, and ``"Period"``.
     """
     df = pd.read_csv(filepath)
 
@@ -358,16 +695,29 @@ def read_market_price_table(filepath):
 
 def read_capacity_file(filepath):
     """
-    Reads installed capacity file.
+    Read and prepare a TIMES installed-capacity table.
 
-    Expected columns:
-    Period, Process, Sum of PV, Region
+    Parameters
+    ----------
+    filepath : path-like
+        Path to the installed-capacity CSV file.
 
-    Returns:
-        Period
-        Process
-        Region
-        InstalledCapacity_MW
+    Returns
+    -------
+    pandas.DataFrame
+        Capacity table containing ``"Period"``, ``"Process"``, ``"Region"``,
+        and ``"InstalledCapacity_MW"``.
+
+    Raises
+    ------
+    ValueError
+        If the input file is missing one or more required columns.
+
+    Notes
+    -----
+    The required input columns are ``"Period"``, ``"Process"``,
+    ``"Sum of PV"``, and ``"Region"``. Capacity values with an absolute
+    magnitude below ``ZERO_TOLERANCE`` are set to zero.
     """
 
     df = pd.read_csv(filepath)
@@ -409,12 +759,26 @@ def read_capacity_file(filepath):
 
 def extract_period_from_filename(filepath: Path) -> str:
     """
-    Extracts the year from filenames containing '-20xx'.
+    Extract a four-digit model year from a filename.
 
-    Examples:
-        production-2030.csv -> "2030"
-        SorvestF-2035.csv   -> "2035"
-        results-2040-test.csv -> "2040"
+    Parameters
+    ----------
+    filepath : pathlib.Path
+        Path whose filename contains a year preceded by a hyphen.
+
+    Returns
+    -------
+    str or None
+        Extracted year between 2000 and 2099, or ``None`` if no matching year
+        is found.
+
+    Examples
+    --------
+    ``production-2030.csv`` returns ``"2030"``.
+
+    ``SorvestF-2035.csv`` returns ``"2035"``.
+
+    ``results-2040-test.csv`` returns ``"2040"``.
     """
     match = re.search(r"-(20\d{2})", filepath.stem)
 
@@ -430,12 +794,40 @@ def read_production_files(
     ):
 
     """
-    Reads all production files named with xxx_<Period>.csv.
-    Expected columns:
-    TimeSliceSorted, Sum of PV, Process, Region
-    Adds:
-    Period
-    Production_GWh
+    Read and combine TIMES production files.
+
+    Files matching the specified pattern are read from a directory. The model
+    period is extracted from each filename, and the selected production column
+    is standardized as ``"Production_GWh"``.
+
+    Parameters
+    ----------
+    production_folder : path-like
+        Directory containing the production CSV files.
+    file_pattern : str, optional
+        Glob pattern used to select files. The default is ``"*.csv"``.
+    production_col : str, optional
+        Name of the input column containing production values. The default is
+        ``"Sum of PV"``.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Combined production records with standardized period and production
+        columns.
+
+    Raises
+    ------
+    FileNotFoundError
+        If no files match ``file_pattern`` in ``production_folder``.
+    ValueError
+        If a selected file is missing ``"TimeSliceSorted"``, ``"Process"``,
+        ``"Region"``, or the specified production column.
+
+    Notes
+    -----
+    Files without a model year matching the expected filename pattern are
+    skipped.
     """
 
     production_folder = Path(production_folder)
@@ -480,29 +872,43 @@ def read_production_files(
 
 def make_subsidy_price_table(subsidy_price_ore_kwh, periods, regions=None):
     """
-    Creates a subsidy price table.
+    Construct a subsidy-price table by region and model period.
 
-    Accepts either:
+    Subsidy prices may be provided as one scalar value, as values indexed by
+    period, or as values indexed by region-period pairs.
 
-    1) Scalar:
-       subsidy_price_ore_kwh = 100
+    Parameters
+    ----------
+    subsidy_price_ore_kwh : float or dict
+        Subsidy-price specification in ore/kWh. Supported forms are:
 
-    2) Dict by period:
-       subsidy_price_ore_kwh = {
-           "2030": 100,
-           "2035": 95,
-           "2040": 90,
-       }
+        * One scalar applied to all requested regions and periods.
+        * A dictionary indexed by period.
+        * A dictionary indexed by ``(region, period)`` tuples.
+    periods : iterable
+        Model periods included in the output table.
+    regions : iterable, optional
+        Regions included in the output table. If omitted, a region value of
+        ``None`` is used.
 
-    3) Dict by (region, period):
-       subsidy_price_ore_kwh = {
-           ("O_Sorvest", "2030"): 100,
-           ("O_Sorvest", "2035"): 95,
-           ("O_Vestavind2", "2030"): 105,
-       }
+    Returns
+    -------
+    pandas.DataFrame
+        Subsidy-price table containing ``"Region"``, ``"Period"``,
+        ``"SubsidyPrice_ore_per_kWh"``, and
+        ``"SubsidyPrice_kNOK_per_GWh"``.
 
-    Returns columns:
-    Region, Period, SubsidyPrice_ore_per_kWh, SubsidyPrice_kNOK_per_GWh
+    Raises
+    ------
+    TypeError
+        If ``subsidy_price_ore_kwh`` is neither a scalar nor a dictionary.
+    ValueError
+        If the supplied data produces an empty subsidy-price table.
+
+    Notes
+    -----
+    Dictionary lookup prioritizes a matching ``(region, period)`` entry,
+    followed by a string period and then an integer period.
     """
     periods = [str(p) for p in periods]
 
@@ -564,7 +970,22 @@ def make_subsidy_price_table(subsidy_price_ore_kwh, periods, regions=None):
 
 def get_wind_region(region, process):
     """
-    Convert Region + Process into a TIMES WindRegion.
+    Map a TIMES region and process to an offshore wind region.
+
+    Processes in the ``"O_Sorvest"`` region are mapped according to their
+    process suffix. For other regions, the ``"O_"`` prefix is removed.
+
+    Parameters
+    ----------
+    region : str
+        TIMES region identifier.
+    process : str
+        TIMES process identifier.
+
+    Returns
+    -------
+    str
+        Offshore wind region name.
     """
 
     if region == "O_Sorvest":
@@ -599,6 +1020,73 @@ def calculate_cfd_subsidy_capex(
     process_filter=None,
     output_folder=None,
 ):
+    """
+    Calculate the discounted CAPEX-equivalent value of CfD payments.
+
+    Production data are combined with seasonal market prices, installed
+    capacity, and subsidy prices. The resulting Contract for Difference
+    payments are normalized by installed capacity, annualized over each
+    five-year model period, discounted to the base year, and aggregated by
+    offshore wind region.
+
+    Parameters
+    ----------
+    production_folder : path-like
+        Directory containing TIMES production CSV files.
+    market_price_file : path-like
+        Path to the seasonal market-price CSV file.
+    capacity_file : path-like
+        Path to the installed-capacity CSV file.
+    subsidy_price_ore_kwh : float or dict
+        Subsidy-price specification in ore/kWh. It may be a scalar, a
+        dictionary indexed by period, or a dictionary indexed by
+        ``(region, period)``.
+    region_price_map : dict
+        Mapping from TIMES production regions to electricity price regions.
+    discount_rate : float, optional
+        Annual discount rate expressed as a decimal. The default is 0.04.
+    base_year : int, optional
+        Year to which CfD payments are discounted. The default is 2030.
+    file_pattern : str, optional
+        Glob pattern used to select production files. The default is
+        ``"*.csv"``.
+    process_filter : str or iterable of str, optional
+        Process identifier or identifiers retained in the production data.
+        If omitted, all processes are retained.
+    output_folder : path-like, optional
+        Directory in which ``cfd_capex.csv`` is exported. If omitted, no CSV
+        file is written.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Discounted CAPEX-equivalent CfD support by wind region. The returned
+        table contains ``"WindRegion"`` and
+        ``"Discounted_CAPEX_kNOK_per_MW"``.
+
+    Raises
+    ------
+    FileNotFoundError
+        If no production files match the selected file pattern.
+    ValueError
+        If required columns are missing from an input file.
+    ValueError
+        If a production region has no corresponding market-price region.
+    ValueError
+        If market prices are missing for positive-production records.
+    ValueError
+        If subsidy prices are missing for positive-production records.
+
+    Notes
+    -----
+    CfD payments are calculated as production multiplied by the difference
+    between the subsidy price and the market price. Negative differences are
+    retained by the calculation.
+
+    Rows with installed capacity less than or equal to ``ZERO_TOLERANCE`` are
+    excluded. Each model-period payment is treated as an annual value over a
+    five-year period before discounting.
+    """
     production = read_production_files(
         production_folder=production_folder,
         file_pattern=file_pattern,

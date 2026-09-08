@@ -1,14 +1,42 @@
+"""
+
+Simulation utilities for modeling offshore wind O&M processes.
+
+This module provides classes and functions for simulating failure, maintenance, and repair activities in offshore wind farms.
+"""
+
 from collections import defaultdict
 from dataclasses import dataclass
 import numpy as np
 from offshore_om.components import WindRegion, WindFarm, vessel_data
 from offshore_om.constants import HOURS_PER_YEAR
 from offshore_om.downtime import CostTracker
-from offshore_om.failures import Campaign, Failure
+from offshore_om.campaign import Campaign, Failure
 
 
 @dataclass
 class SimulationSettings:
+    """
+    Configuration parameters for an offshore wind O&M simulation.
+
+    The settings define the simulation horizon, workforce schedule, turbine
+    capacity, campaign parts capacity, and resupply duration.
+
+    Attributes
+    ----------
+    horizon_years : float
+        Duration of the simulation horizon in years.
+    shift_hours : float
+        Number of working hours in one crew shift.
+    daily_rate : float
+        Daily labour cost per worker.
+    capacity_per_turbine : float
+        Rated generation capacity of one turbine in MW.
+    part_capacity : int
+        Maximum number of replacement parts carried by a campaign.
+    resupply_time_h : float
+        Time required to reload replacement parts at port, in hours.
+    """
     horizon_years: float
     shift_hours: float
     daily_rate: float
@@ -18,6 +46,56 @@ class SimulationSettings:
 
 
 class Simulation:
+    """
+    Simulate failure, maintenance, and repair campaigns for an offshore wind farm.
+
+    The simulation advances through failure events, groups failures into
+    maintenance campaigns, applies vessel and labour constraints, and records
+    repair costs, downtime, and lost energy production.
+
+    Parameters
+    ----------
+    farm : WindFarm
+        Wind farm containing the turbines and components to simulate.
+    region : WindRegion
+        Region containing geographic and production characteristics.
+    settings : SimulationSettings
+        Operational and economic simulation settings.
+    rng : numpy.random.Generator
+        Random number generator used by stochastic simulation processes.
+
+    Attributes
+    ----------
+    farm : WindFarm
+        Wind farm being simulated.
+    region : WindRegion
+        Offshore wind region used by the simulation.
+    settings : SimulationSettings
+        Simulation configuration.
+    rng : numpy.random.Generator
+        Random number generator used by the simulation.
+    t_h : float
+        Current simulation time in hours.
+    costs : CostTracker
+        Accumulator for cost, downtime, and lost-production events.
+    n_campaigns : int
+        Number of maintenance campaigns initiated.
+    n_failures : int
+        Number of failures registered.
+    n_repairs : int
+        Number of repairs completed.
+    repairs_by_component : collections.defaultdict
+        Number of completed repairs grouped by component name.
+    failures_by_component : collections.defaultdict
+        Number of registered failures grouped by component name.
+    pending_failures : list
+        Failures deferred until the current frozen campaign is completed.
+
+    Notes
+    -----
+    When ``DEBUG`` is enabled, simulation events are printed with their
+    corresponding simulation time.
+    """
     DEBUG = False
 
     def __init__(
@@ -27,6 +105,21 @@ class Simulation:
         settings: SimulationSettings,
         rng: np.random.Generator,
     ):
+        """
+        Initialize an offshore wind O&M simulation.
+
+        Parameters
+        ----------
+        farm : WindFarm
+            Wind farm containing the turbines and components to simulate.
+        region : WindRegion
+            Region containing distance and capacity-factor information.
+        settings : SimulationSettings
+            Operational and economic simulation settings.
+        rng : numpy.random.Generator
+            Random number generator used by stochastic model components.
+        """
+                
         self.farm = farm
         self.region = region
         self.settings = settings
@@ -44,6 +137,19 @@ class Simulation:
         self.pending_failures = []
 
     def log(self, *args):
+        """
+        Print a timestamped simulation message when debugging is enabled.
+
+        Parameters
+        ----------
+        *args
+            Values passed to :func:`print`.
+
+        Notes
+        -----
+        The timestamp is expressed in simulation years.
+        """
+
         if self.DEBUG:
             print(f"[{self.t_h / HOURS_PER_YEAR:7.3f} yr]", *args)
 
@@ -52,6 +158,22 @@ class Simulation:
         duration_h: float,
         horizon_h: float,
     ):
+        """
+        Advance time during an activity whose campaign scope is frozen.
+
+        Failures occurring during the activity are registered and added to the
+        pending-failure queue rather than to the active campaign. If the
+        activity extends beyond the simulation horizon, the remaining time is
+        advanced without aging the wind farm.
+
+        Parameters
+        ----------
+        duration_h : float
+            Duration of the campaign activity in hours.
+        horizon_h : float
+            End of the simulation horizon in hours.
+        """
+
         activity_end_h = self.t_h + duration_h
         search_until_h = min(activity_end_h, horizon_h)
 
@@ -81,6 +203,21 @@ class Simulation:
             self.jump_to_without_aging(activity_end_h)
 
     def advance_to(self, new_time_h: float):
+        """
+        Advance the simulation clock and age the wind farm.
+
+        Parameters
+        ----------
+        new_time_h : float
+            Target simulation time in hours.
+
+        Raises
+        ------
+        ValueError
+            If the target time is earlier than the current simulation time,
+            except for differences smaller than the numerical tolerance.
+        """
+
         if new_time_h < self.t_h:
             if self.t_h - new_time_h < 1e-7:
                 return
@@ -95,9 +232,43 @@ class Simulation:
             self.t_h = new_time_h
 
     def one_way_transit_h(self, vessel: dict):
+        """
+        Calculate the vessel's one-way transit time to or from the wind farm.
+
+        Parameters
+        ----------
+        vessel : dict
+            Vessel data containing the ``speed_kmh`` entry.
+
+        Returns
+        -------
+        float
+            One-way transit time in hours.
+        """
+
         return self.region.distance_to_shore_km / vessel["speed_kmh"]
 
     def jump_to_without_aging(self, new_time_h: float):
+        """
+        Move the simulation clock without aging wind-farm components.
+
+        Parameters
+        ----------
+        new_time_h : float
+            Target simulation time in hours.
+
+        Raises
+        ------
+        ValueError
+            If the target time is earlier than the current simulation time,
+            except for differences smaller than the numerical tolerance.
+
+        Notes
+        -----
+        This method changes the simulation clock without updating component
+        remaining lifetimes.
+        """
+
         if new_time_h < self.t_h:
             if self.t_h - new_time_h < 1e-7:
                 return
@@ -109,6 +280,21 @@ class Simulation:
         self.t_h = new_time_h
 
     def run(self, horizon_years: float = None):
+        """
+        Run the failure and maintenance simulation.
+
+        The simulation processes pending failures first. Otherwise, it advances
+        to the next wind-farm failure. Each initiating failure creates a new
+        maintenance campaign, after which campaign execution is delegated to
+        :meth:`run_campaign`.
+
+        Parameters
+        ----------
+        horizon_years : float, optional
+            Simulation horizon in years. If omitted, the value from
+            :attr:`SimulationSettings.horizon_years` is used.
+        """
+                
         if horizon_years is None:
             horizon_years = self.settings.horizon_years
 
@@ -163,6 +349,23 @@ class Simulation:
             self.run_campaign(campaign, horizon_h)
 
     def run_campaign(self, campaign: Campaign, horizon_h: float):
+        """
+        Execute a complete maintenance campaign.
+
+        The campaign collects failures during vessel mobilisation, freezes its
+        repair scope upon vessel arrival, applies weather and transit delays,
+        repairs the frozen backlog, performs resupply when required, and
+        returns the vessel to port. Campaign labour and vessel costs are added
+        after the vessel returns.
+
+        Parameters
+        ----------
+        campaign : Campaign
+            Maintenance campaign to execute.
+        horizon_h : float
+            End of the simulation horizon in hours.
+        """
+
         self.collect_failures_until(
             end_time_h=min(campaign.arrival_time_h, horizon_h),
             campaign=campaign,
@@ -237,6 +440,21 @@ class Simulation:
         )
 
     def perform_resupply(self, campaign: Campaign, horizon_h: float):
+        """
+        Return a campaign to port and replenish its replacement parts.
+
+        The activity consists of transit to port followed by the configured
+        loading period. Failures occurring during these activities are placed
+        in the pending-failure queue.
+
+        Parameters
+        ----------
+        campaign : Campaign
+            Active maintenance campaign requiring replacement parts.
+        horizon_h : float
+            End of the simulation horizon in hours.
+        """
+
         vessel = campaign.vessel
         sail_to_port_h = self.one_way_transit_h(vessel)
         loading_h = self.settings.resupply_time_h
@@ -262,6 +480,23 @@ class Simulation:
         campaign: Campaign,
         horizon_h: float,
     ):
+        """
+        Collect failures occurring while a campaign is mobilising.
+
+        The simulation advances through failure events until the requested end
+        time or the simulation horizon is reached. Each detected failure is
+        registered with the wind farm and added to the campaign backlog.
+
+        Parameters
+        ----------
+        end_time_h : float
+            Time until which failures should be collected, in hours.
+        campaign : Campaign
+            Mobilising campaign receiving the failures.
+        horizon_h : float
+            End of the simulation horizon in hours.
+        """
+
         end_time_h = min(end_time_h, horizon_h)
 
         while self.t_h < end_time_h:
@@ -293,6 +528,23 @@ class Simulation:
         campaign: Campaign,
         horizon_h: float,
     ):
+        """
+        Repair one failure using the active campaign's resources.
+
+        The method determines the component-specific repair duration, advances
+        frozen campaign time, consumes one replacement part, completes the
+        repair, and updates repair counters.
+
+        Parameters
+        ----------
+        failure : Failure
+            Failure to repair.
+        campaign : Campaign
+            Campaign performing the repair.
+        horizon_h : float
+            End of the simulation horizon in hours.
+        """
+
         turbine = self.farm.turbines[failure.turbine_id]
         component = turbine.components[failure.component_id]
         comp_type = component.type
@@ -322,6 +574,19 @@ class Simulation:
         )
 
     def complete_repair(self, failure: Failure):
+        """
+        Complete a repair and record its cost and production-loss consequences.
+
+        The method calculates turbine downtime, material cost, and lost energy
+        production. It records the resulting event in the cost tracker and
+        restores the failed component through the wind-farm model.
+
+        Parameters
+        ----------
+        failure : Failure
+            Failure whose repair has been completed.
+        """
+
         turbine = self.farm.turbines[failure.turbine_id]
         component = turbine.components[failure.component_id]
         comp_type = component.type
@@ -366,6 +631,24 @@ class Simulation:
         self.farm.repair_failure(failure, self.rng)
 
     def add_campaign_costs(self, campaign: Campaign):
+        """
+        Calculate and record labour and vessel costs for a campaign.
+
+        Campaign duration is converted to billable days by rounding upward.
+        Vessel costs include mobilisation and daily charter costs. Labour costs
+        depend on crew size, billable days, and the configured daily rate.
+
+        Parameters
+        ----------
+        campaign : Campaign
+            Completed campaign for which costs are calculated.
+
+        Raises
+        ------
+        ValueError
+            If the campaign charter start or end time has not been set.
+        """
+
         vessel = campaign.vessel
 
         if campaign.charter_start_h is None or campaign.charter_end_h is None:
@@ -399,11 +682,46 @@ class Simulation:
         )
 
     def component_type_from_failure(self, failure: Failure):
+        """
+        Retrieve the component type associated with a failure.
+
+        Parameters
+        ----------
+        failure : Failure
+            Failure identifying a turbine and component.
+
+        Returns
+        -------
+        object
+            Component type assigned to the failed component.
+        """
+
         turbine = self.farm.turbines[failure.turbine_id]
         component = turbine.components[failure.component_id]
         return component.type
 
     def campaign_crew_workers(self, failures: list[Failure]):
+        """
+        Determine the number of workers required for a campaign.
+
+        The crew requirement is based on the largest repair workforce among
+        the campaign failures. It is multiplied by the number of shifts needed
+        to cover a 24-hour operating day and rounded upward. We use 24 hours 
+        shift length as baseline, and the actual shift length is configurable 
+        in the simulation settings.
+
+        Parameters
+        ----------
+        failures : list of Failure
+            Failures included in the campaign's frozen repair scope.
+
+        Returns
+        -------
+        int
+            Required number of campaign workers. Returns zero when the failure
+            list is empty.
+        """
+
         if not failures:
             return 0
 
@@ -417,6 +735,18 @@ class Simulation:
         return int(np.ceil(max_workers * shift_multiplier))
 
     def print_status(self):
+        """
+        Print the current wind-farm and simulation status.
+
+        The output includes turbine operating states, component remaining
+        lifetimes, direct cost per repair, lost-production cost per repair,
+        and transport cost per campaign.
+
+        Notes
+        -----
+        This method writes directly to standard output.
+        """
+
         print("\nFarm status")
         print("-" * 60)
 
@@ -438,6 +768,17 @@ class Simulation:
 
     @property
     def summary(self):
+        """
+        Return aggregate results for the current simulation.
+
+        Returns
+        -------
+        dict
+            Dictionary containing campaign, failure, and repair counts together
+            with downtime, lost energy, and direct-cost totals. The cost totals
+            are separated into material, labour, and transport costs.
+        """
+
         return {
             "campaigns": self.n_campaigns,
             "failures": self.n_failures,
@@ -451,6 +792,24 @@ class Simulation:
         }
 
 def print_array_summary(name, values, unit=""):
+    """
+    Print descriptive statistics for an array of simulation results.
+
+    Parameters
+    ----------
+    name : str
+        Name displayed before the statistics.
+    values : array-like
+        Numerical values from which the statistics are calculated.
+    unit : str, optional
+        Unit displayed after the statistics.
+
+    Notes
+    -----
+    The printed statistics are the mean and the 50th, 75th, and 95th
+    percentiles.
+    """
+
     values = np.asarray(values)
     print(
         f"{name:<35}"
@@ -478,6 +837,69 @@ def simulate_wind_farm_OandM(
     debug_sim: int = 0,
     progress_every: int = 1000,
 ):
+    """
+    Run repeated offshore wind O&M simulations.
+
+    For each realization, the function creates a wind farm, initializes the
+    simulation settings, executes the specified simulation horizon, and stores
+    campaign, repair, downtime, cost, and lost-production results.
+
+    Parameters
+    ----------
+    n_turbines : int
+        Number of turbines in the simulated wind farm.
+    component_types : list, optional
+        Component-type definitions assigned to each turbine.
+    region : WindRegion, optional
+        Offshore wind region containing distance and production information.
+    horizon_years : float, optional
+        Simulation horizon in years. The default is 25 years.
+    capacity_per_turbine : float, optional
+        Rated capacity of one turbine in MW. The default is 15 MW.
+    daily_rate : float, optional
+        Daily labour cost per worker. The default is 10000.
+    n_simulations : int, optional
+        Number of Monte Carlo realizations. The default is 10000.
+    random_seed : int, optional
+        Seed used to initialize the random number generator. If omitted, NumPy
+        initializes the generator without a fixed seed.
+    shift_hours : float, optional
+        Duration of one crew shift in hours. The default is 12 hours.
+    part_capacity : int, optional
+        Maximum number of replacement parts carried by a campaign. The default
+        is 3.
+    resupply_time_h : float, optional
+        Time required to reload parts at port, in hours. The default is 24
+        hours.
+    debug : bool, optional
+        Whether to enable detailed output for one simulation realization.
+    debug_sim : int, optional
+        Zero-based index of the realization for which debugging is enabled.
+    progress_every : int, optional
+        Number of simulations between progress messages. Set to ``None`` to
+        disable periodic progress output.
+
+    Returns
+    -------
+    dict
+        Simulation inputs, event records, and aggregated outputs. Returned
+        results include lifetime direct costs, lost energy, downtime,
+        campaigns per realization, total repairs by component, installed
+        capacity, and summary statistics.
+
+    Raises
+    ------
+    ValueError
+        If ``component_types`` is not provided.
+    ValueError
+        If ``region`` is not provided.
+
+    Notes
+    -----
+    Summary statistics include the mean, 75th percentile,
+    and upper-tail VaR and CVaR at the 95th-percentile threshold.
+    """
+
     rng = np.random.default_rng(seed=random_seed)
 
     if component_types is None:
@@ -560,6 +982,20 @@ def simulate_wind_farm_OandM(
         print(f"{comp:10s}{mean_repairs:.3f} repairs/lifetime")
 
     def summary_stats(values):
+        """
+        Calculate summary and upper-tail statistics.
+
+        Parameters
+        ----------
+        values : array-like
+            Numerical simulation results.
+
+        Returns
+        -------
+        dict
+            Mean, 75th percentile, 95th percentile, and CVaR of observations
+            greater than or equal to the 95th-percentile threshold.
+        """
 
         values = np.asarray(values)
 

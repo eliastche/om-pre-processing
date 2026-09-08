@@ -1,293 +1,65 @@
-﻿from pathlib import Path
+﻿"""
+High-level execution utilities for offshore wind O&M analysis.
+
+This module connects the component, simulation, economic, and visualization
+parts of the :mod:`offshore_om` package. It provides functions for loading
+scenario data, running Monte Carlo O&M simulations, evaluating economic
+outcomes, constructing cumulative cost trajectories, visualizing cost risk,
+and exporting consolidated results.
+
+The functions in this module are intended to provide the main interface
+between the underlying package and simulation notebooks.
+"""
+
+from pathlib import Path
 
 import pandas as pd
 
 from offshore_om.components import WindRegions, build_component_types
 from offshore_om.constants import HOURS_PER_YEAR
+from offshore_om.plotting import (
+    build_cost_trajectories,
+    plot_cost_risk_evolution,
+)
 
 from offshore_om.economics import (
     calculate_cfd_subsidy_capex,
-    convert_ore_kwh_to_knok_mwh,
     get_market_region_name,
     read_market_price_file,
     evaluate_monte_carlo_economics,
 )
 from offshore_om.simulation import simulate_wind_farm_OandM
 
-from pathlib import Path
-
 import matplotlib.pyplot as plt
-import numpy as np
 
 
-def build_cost_trajectories(
-    events_by_simulation,
-    horizon_years,
-    n_points=1000,
-):
+def load_scenario_configs(scenario_config):
     """
-    Construct cumulative undiscounted direct-cost trajectories while
-    preserving the timing of individual failure events.
+    Load market-price data for a collection of scenario configurations.
+
+    Each input configuration is transformed into a dictionary containing the
+    scenario name and the market data read from its associated market-price
+    file.
 
     Parameters
     ----------
-    events_by_simulation : list
-        One list of cost events for each Monte Carlo simulation.
-        Each event must contain `time_years` and `direct_cost`.
-
-    horizon_years : float
-        Simulation horizon in years.
-
-    n_points : int, default=1000
-        Number of points in the common time grid used to calculate
-        the time-dependent Monte Carlo statistics.
+    scenario_config : iterable of dict
+        Scenario configurations. Each dictionary must contain the keys
+        ``"Scenario"`` and ``"MarketFile"``.
 
     Returns
     -------
-    t_grid : np.ndarray
-        Common time grid from year 0 to the simulation horizon.
+    list of dict
+        Loaded scenario configurations. Each returned dictionary contains:
 
-    trajectories : np.ndarray
-        Cumulative undiscounted direct costs.
-        Shape: (n_simulations, n_points).
+        ``"Scenario"``
+            Name of the market scenario.
+
+        ``"MarketData"``
+            Market-price data returned by
+            :func:`offshore_om.economics.read_market_price_file`.
     """
 
-    t_grid = np.linspace(
-        0.0,
-        float(horizon_years),
-        n_points,
-    )
-
-    n_simulations = len(events_by_simulation)
-
-    trajectories = np.zeros(
-        (n_simulations, n_points),
-        dtype=float,
-    )
-
-    for sim_id, events in enumerate(events_by_simulation):
-
-        # Retain only events inside the simulation horizon
-        valid_events = [
-            event
-            for event in events
-            if 0.0 <= event.time_years <= horizon_years
-        ]
-
-        # Sort events chronologically
-        valid_events = sorted(
-            valid_events,
-            key=lambda event: event.time_years,
-        )
-
-        if not valid_events:
-            continue
-
-        event_times = np.asarray(
-            [event.time_years for event in valid_events],
-            dtype=float,
-        )
-
-        event_costs = np.asarray(
-            [event.direct_cost for event in valid_events],
-            dtype=float,
-        )
-
-        cumulative_event_costs = np.cumsum(event_costs)
-
-        # For every grid point, locate the latest event that has occurred.
-        # This produces a true stepwise cumulative-cost trajectory.
-        event_indices = (
-            np.searchsorted(
-                event_times,
-                t_grid,
-                side="right",
-            )
-            - 1
-        )
-
-        event_has_occurred = event_indices >= 0
-
-        trajectories[
-            sim_id,
-            event_has_occurred,
-        ] = cumulative_event_costs[
-            event_indices[event_has_occurred]
-        ]
-
-    return t_grid, trajectories
-
-
-def plot_cost_risk_evolution(
-    t_grid,
-    trajectories,
-    output_path="figures/cumulative_direct_cost_risk_evolution.pdf",
-    currency_scale=1e6,
-    currency_label="MNOK",
-    show_fan_bands=True,
-):
-    """
-    Plot the evolution of cumulative undiscounted direct-cost risk.
-
-    The figure includes:
-    - Mean
-    - P75
-    - VaR95, equivalent to P95 for direct costs
-    - CVaR95, calculated as the mean above the contemporaneous VaR95
-    - Optional P5-P95 and P25-P75 uncertainty bands
-    """
-
-    t_grid = np.asarray(t_grid, dtype=float)
-    trajectories = np.asarray(trajectories, dtype=float)
-
-    if trajectories.ndim != 2:
-        raise ValueError(
-            "trajectories must be a two-dimensional array with shape "
-            "(n_simulations, n_time_points)."
-        )
-
-    if trajectories.shape[1] != len(t_grid):
-        raise ValueError(
-            "The number of trajectory columns must equal the length "
-            "of t_grid."
-        )
-
-    if currency_scale <= 0:
-        raise ValueError("currency_scale must be greater than zero.")
-
-    costs = trajectories / currency_scale
-
-    # Time-dependent Monte Carlo statistics
-    mean = np.mean(costs, axis=0)
-    p05 = np.quantile(costs, 0.05, axis=0)
-    p25 = np.quantile(costs, 0.25, axis=0)
-    p75 = np.quantile(costs, 0.75, axis=0)
-    var95 = np.quantile(costs, 0.95, axis=0)
-
-    # CVaR95 is the mean cost in the upper 5% tail at each time point
-    cvar95 = np.empty_like(var95)
-
-    for time_id, threshold in enumerate(var95):
-
-        tail_costs = costs[:, time_id][
-            costs[:, time_id] >= threshold
-        ]
-
-        cvar95[time_id] = (
-            np.mean(tail_costs)
-            if tail_costs.size > 0
-            else threshold
-        )
-
-    fig, ax = plt.subplots(figsize=(9, 5.5))
-
-    if show_fan_bands:
-
-        ax.fill_between(
-            t_grid,
-            p05,
-            var95,
-            step="post",
-            color="#B8D8E8",
-            alpha=0.45,
-            linewidth=0,
-            label="P5–P95 range",
-        )
-
-        ax.fill_between(
-            t_grid,
-            p25,
-            p75,
-            step="post",
-            color="#4F9EC4",
-            alpha=0.45,
-            linewidth=0,
-            label="P25–P75 range",
-        )
-
-    ax.step(
-        t_grid,
-        mean,
-        where="post",
-        color="#003B5C",
-        linewidth=2.3,
-        label="Mean",
-    )
-
-    ax.step(
-        t_grid,
-        p75,
-        where="post",
-        color="#3786A6",
-        linewidth=1.9,
-        label="P75",
-    )
-
-    ax.step(
-        t_grid,
-        var95,
-        where="post",
-        color="#D95F02",
-        linewidth=2.1,
-        label=r"VaR$_{95}$",
-    )
-
-    ax.step(
-        t_grid,
-        cvar95,
-        where="post",
-        color="#8B1A1A",
-        linewidth=2.3,
-        linestyle="--",
-        label=r"CVaR$_{95}$",
-    )
-
-    ax.set_xlabel("Year")
-
-    ax.set_ylabel(
-        f"Cumulative undiscounted direct cost [{currency_label}]"
-    )
-
-    ax.set_xlim(
-        0.0,
-        float(np.max(t_grid)),
-    )
-
-    ax.set_ylim(bottom=0.0)
-
-    ax.grid(
-        axis="y",
-        linestyle=":",
-        linewidth=0.7,
-        alpha=0.6,
-    )
-
-    ax.legend(
-        frameon=False,
-        loc="upper left",
-        ncol=2,
-    )
-
-    fig.tight_layout()
-
-    output_path = Path(output_path)
-
-    output_path.parent.mkdir(
-        parents=True,
-        exist_ok=True,
-    )
-
-    fig.savefig(
-        output_path,
-        bbox_inches="tight",
-        dpi=300,
-    )
-
-    print(f"Figure exported to: {output_path.resolve()}")
-
-    return fig, ax
-
-def load_scenario_configs(scenario_config):
     scenario_configs = []
     for config in scenario_config:
         scenario_configs.append(
@@ -308,7 +80,63 @@ def simulate_region_scenario(
     failure_rate_type,
     discount_rate_list,
     subsidy_price_list=None,
+    make_plots=False,
 ):
+    """
+    Simulate O&M and economic outcomes for one offshore wind region.
+
+    The function runs the offshore wind O&M Monte Carlo model for the selected
+    region and wind-farm configuration. It subsequently evaluates the economic
+    consequences under the supplied market, discount-rate, and subsidy-price
+    scenarios.
+
+    Cumulative direct-cost trajectories and cost-risk figures are also
+    generated for the region. The resulting economic rows are supplemented
+    with technical, geographic, and simulation metadata.
+
+    Parameters
+    ----------
+    region : WindRegion
+        Offshore wind region to simulate. The object must provide the
+        attributes ``name``, ``floating``, ``capacity_factor``, and
+        ``distance_to_shore_km``.
+    scenario_configs : iterable of dict
+        Loaded market scenario configurations. Each dictionary must contain
+        the keys ``"Scenario"`` and ``"MarketData"``.
+    component_types : list
+        Component-type definitions assigned to each wind turbine.
+    n_turbines : int
+        Number of turbines in the simulated wind farm.
+    capacity_per_turbine : float
+        Rated capacity of one turbine in MW.
+    horizon_years : float
+        Simulation horizon in years.
+    failure_rate_type : str
+        Name or identifier of the failure-rate assumption used to construct
+        the component types.
+    discount_rate_list : iterable of float
+        Discount rates included in the economic evaluation.
+    subsidy_price_list : iterable of float, optional
+        Subsidy strike prices in ore per kWh. If omitted, the economic
+        evaluation is performed without an explicitly supplied list.
+
+    Returns
+    -------
+    list of dict
+        Economic evaluation rows containing cost metrics and corresponding
+        technical and scenario metadata.
+
+    Notes
+    -----
+    Direct, lost-production, and total costs are normalized by installed
+    wind-farm capacity before being returned.
+
+    Availability is calculated from the downtime statistic associated with
+    each economic metric and is bounded below by zero.
+
+    This function also exports cumulative cost-risk and terminal cost
+    distribution figures for the selected region.
+    """
 
     region_name = get_market_region_name(region.name)
 
@@ -338,23 +166,24 @@ def simulate_region_scenario(
         market_scenarios=market_scenarios,
         subsidy_prices_ore_per_kwh=subsidy_price_list,
     )
-    
-    t_grid, trajectories = build_cost_trajectories(
-        events_by_simulation=sim_result["events_by_simulation"],
-        horizon_years=sim_result["horizon_years"],
-        n_points=1000,
-    )
 
-    fig, ax = plot_cost_risk_evolution(
-        t_grid=t_grid,
-        trajectories=trajectories,
-        output_path=f"figures/cumulative_direct_cost_risk_evolution_{region.name}.pdf",
-        currency_scale=1e6,
-        currency_label="MNOK",
-    )
+    if make_plots:
+        t_grid, trajectories = build_cost_trajectories(
+            events_by_simulation=sim_result["events_by_simulation"],
+            horizon_years=sim_result["horizon_years"],
+            n_points=1000,
+        )
+
+        fig, ax, fig_hist, ax_hist = plot_cost_risk_evolution(
+            t_grid=t_grid,
+            trajectories=trajectories,
+            output_name=region.name,
+            currency_scale=1e6,
+            currency_label="MNOK",
+        )
 
     downtime_stats = sim_result["downtime"]
-    installed_capacity = sim_result["installed_capacity"]
+    installed_capacity = sim_result["installed_capacity"]    
 
     for row in econ_rows:
         metric = row["Metric"]
@@ -391,6 +220,46 @@ def simulate_region_scenario(
     return econ_rows
 
 def run_subsidy_capex(times_subsidy_config, discount_rate_list, subsidy_price_list, times_scenario, base_year, output_dir):
+    """
+    Calculate and export subsidy-related CAPEX adjustments for TIMES scenarios.
+
+    The function evaluates every combination of TIMES scenario, discount rate,
+    and subsidy price. The individual results are combined into one table and
+    exported to an Excel workbook.
+
+    Parameters
+    ----------
+    times_subsidy_config : dict
+        Configuration used for the subsidy calculation. It must contain
+        ``"region_price_map"`` and may contain ``"file_pattern"`` and
+        ``"process_filter"``.
+    discount_rate_list : iterable of float
+        Discount rates used in the subsidy CAPEX calculations.
+    subsidy_price_list : iterable of float
+        Subsidy prices in ore per kWh.
+    times_scenario : iterable of dict
+        TIMES scenario configurations. Each dictionary must contain
+        ``"Scenario"``, ``"production_folder"``, ``"market_price_file"``,
+        and ``"capacity_file"``.
+    base_year : int
+        Base year used for discounting.
+    output_dir : path-like
+        Directory in which the resulting Excel workbook is written.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Combined subsidy CAPEX results for all TIMES scenarios, discount
+        rates, and subsidy prices.
+
+    Notes
+    -----
+    The returned table contains the additional columns ``"Scenario"``,
+    ``"SubsidyPrice"``, and ``"DiscountRate"``.
+
+    The combined results are exported as ``subsidy_capex.xlsx`` in
+    ``output_dir``.
+    """
     capex_dfs = []
 
     for scenario in times_scenario:
@@ -435,7 +304,58 @@ def run_master(
     failure_rate_types,
     subsidy_price_list,
     output_dir=Path("om_results_master_table.xlsx"),
+    make_plots=False,
 ):
+    """
+    Run the complete offshore wind O&M scenario matrix.
+
+    The function evaluates combinations of turbine capacity, failure-rate
+    assumption, offshore wind region, wind-farm size, and simulation horizon.
+    For each combination, it runs the regional O&M and economic analysis and
+    collects the resulting rows in a consolidated table.
+
+    A direct-cost comparison figure is produced for the selected site, and the
+    complete result table is exported to Excel.
+
+    Parameters
+    ----------
+    scenario_configs : iterable of dict
+        Loaded market scenario configurations. Each dictionary must contain
+        the keys ``"Scenario"`` and ``"MarketData"``.
+    turbine_capacity_list : iterable of float
+        Turbine capacities in MW to include in the scenario matrix.
+    n_turbines_list : iterable of int
+        Wind-farm sizes, expressed as numbers of turbines.
+    discount_rate_list : iterable of float
+        Discount rates included in the economic evaluation.
+    horizon_years : iterable of float
+        Simulation horizons in years.
+    failure_rate_types : iterable of str
+        Failure-rate assumptions used to construct component types.
+    subsidy_price_list : iterable of float
+        Subsidy prices in ore per kWh included in the economic evaluation.
+    output_dir : pathlib.Path, optional
+        Output location used when constructing the master-table Excel path.
+        The default is ``Path("om_results_master_table.xlsx")``.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Consolidated technical and economic results for the complete scenario
+        matrix.
+
+    Notes
+    -----
+    Component types are rebuilt for each combination of turbine capacity,
+    failure-rate assumption, and fixed or floating wind-region configuration.
+
+    The exported master table places the main scenario descriptors, technical
+    parameters, and cost metrics before any remaining columns.
+
+    A direct O&M cost comparison figure is exported as
+    ``figures/direct_cost_vs_farm_size_metrics.pdf``.
+    """
+
     all_rows = []
 
     for capacity_per_turbine in turbine_capacity_list:
@@ -460,39 +380,10 @@ def run_master(
                             failure_rate_type=failure_rate_type,
                             discount_rate_list=discount_rate_list,
                             subsidy_price_list=subsidy_price_list,
+                            make_plots=make_plots,
                         )
 
                         all_rows.extend(rows)
-    df = pd.DataFrame(all_rows)
-
-    mean_df = df[df["Metric"] == "Mean"]
-
-    fig, ax = plt.subplots(figsize=(7,4))
-
-    for site, grp in mean_df.groupby("Site"):
-
-        grp = grp.sort_values("ParkSize")
-
-        ax.plot(
-            grp["ParkSize"],
-            grp["DirectCost"],
-            marker="o",
-            linewidth=2,
-            label=site,
-        )
-
-    ax.set_xlabel("Number of turbines")
-    ax.set_ylabel("Direct O&M cost [kNOK/MW/year]")
-
-    ax.legend()
-
-    fig.tight_layout()
-
-    fig.savefig(
-        "figures/direct_cost_vs_farm_size_comparison.pdf",
-        bbox_inches="tight",
-    )
-
     master_df = pd.DataFrame(all_rows)
 
     preferred_columns = [
