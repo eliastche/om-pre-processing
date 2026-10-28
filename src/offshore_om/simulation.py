@@ -8,8 +8,8 @@ This module provides classes and functions for simulating failure, maintenance, 
 from collections import defaultdict
 from dataclasses import dataclass
 import numpy as np
-from offshore_om.components import WindRegion, WindFarm, vessel_data
-from offshore_om.constants import HOURS_PER_YEAR
+from offshore_om.components import WindRegion, WindFarm
+from offshore_om.constants import HOURS_PER_YEAR, vessel_data
 from offshore_om.downtime import CostTracker
 from offshore_om.campaign import Campaign, Failure
 

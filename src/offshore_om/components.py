@@ -13,7 +13,7 @@ from dataclasses import dataclass
 import numpy as np
 from scipy.special import gamma
 from copy import deepcopy
-from .constants import kNOKEUR, kNOKGBP, HOURS_PER_YEAR, component_data
+from .constants import kNOKEUR, kNOKGBP, HOURS_PER_YEAR, component_data, wind_region_data
 from .campaign import Failure
 
 
@@ -100,6 +100,11 @@ class WindRegion:
     capacity_factor: float
     distance_to_shore_km: float
     floating: bool
+
+WindRegions = [
+    WindRegion(name, value, distance, floating=floating)
+    for name, value, distance, floating in wind_region_data
+]
 
 class Component:
     """

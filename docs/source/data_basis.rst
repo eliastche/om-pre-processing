@@ -18,7 +18,7 @@ distributions.
 The default values are derived from published offshore wind
 O&M literature, including the shape parameter estimates
 of :cite:p:`mikindaniFinancialRisksWind2025`. and subsequent offshore wind maintenance
-studies by :cite:p:`carrollEconomicAnalysisWind2025`, :cite:p:`dalgicEconomicAnalysisWind2025`, :cite:p:`donnellyEconomicAnalysisWind2025` and others. These values
+studies by :cite:p:`carrollFailureRateRepair2016`, :cite:p:`jenkinsEstimatingMajorReplacement2022`, :cite:p:`hendriks2015reliability` and others. These values
 represent engineering assumptions and can be modified for
 alternative studies.
 

@@ -62,8 +62,6 @@ encouraged to modify or replace these assumptions through scenario
 configuration when conducting project-specific analyses.
 """
 
-from offshore_om.components import WindRegion
-
 HOURS_PER_YEAR = 8760
 kNOKEUR = 10.39 / 1000
 kNOKGBP = 11.385 / 1000
@@ -136,16 +134,16 @@ vessel_data = {
 }
 
 
-WindRegions = [
-    WindRegion("Nordavind", 0.494, 200, floating=True),
-    WindRegion("Nordvest", 0.483, 110, floating=True),
-    WindRegion("Vestavind1", 0.489, 70, floating=True),
-    WindRegion("Vestavind2", 0.512, 50, floating=True),
-    WindRegion("SorvestA", 0.545, 122, floating=False),
-    WindRegion("SorvestB", 0.543, 152, floating=False),
-    WindRegion("SorvestC", 0.551, 153, floating=False),
-    WindRegion("SorvestD", 0.545, 221, floating=False),
-    WindRegion("SorvestE", 0.561, 112, floating=False),
-    WindRegion("SorvestF", 0.559, 152, floating=False),
-    WindRegion("Sonnavind", 0.565, 60, floating=True)
+wind_region_data = [
+    ("Nordavind", 0.494, 200, True),
+    ("Nordvest", 0.483, 110, True),
+    ("Vestavind1", 0.489, 70, True),
+    ("Vestavind2", 0.512, 50, True),
+    ("SorvestA", 0.545, 122, False),
+    ("SorvestB", 0.543, 152, False),
+    ("SorvestC", 0.551, 153, False),
+    ("SorvestD", 0.545, 221, False),
+    ("SorvestE", 0.561, 112, False),
+    ("SorvestF", 0.559, 152, False),
+    ("Sonnavind", 0.565, 60, True),
 ]
