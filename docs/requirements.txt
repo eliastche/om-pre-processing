@@ -3,3 +3,4 @@ furo
 myst-parser
 sphinxcontrib-bibtex
 pybtex-apa-style
+sphinx-copybutton

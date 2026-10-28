@@ -18,6 +18,7 @@ extensions = [
     "sphinx.ext.autodoc",
     "sphinx.ext.napoleon",
     "sphinxcontrib.bibtex",
+    "sphinx_copybutton",
 ]
 
 templates_path = ['_templates']

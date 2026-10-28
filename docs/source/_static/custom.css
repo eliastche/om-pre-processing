@@ -1,0 +1,10 @@
+/* Remove theme toggle button */
+.theme-toggle-container {
+    display: none !important;
+}
+
+/* Keep visited links same color */
+a,
+a:visited {
+    color: var(--color-brand-content) !important;
+}
